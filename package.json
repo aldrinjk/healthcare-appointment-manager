@@ -12,7 +12,10 @@
     "build:client": "npm run build --workspace client",
     "build:server": "npm run build --workspace server",
     "typecheck:server": "npm run typecheck --workspace server",
-    "prisma:generate": "npm run prisma:generate --workspace server"
+    "prisma:generate": "npm run prisma:generate --workspace server",
+    "prisma:validate": "npm run prisma:validate --workspace server",
+    "db:migrate": "npm run prisma:migrate --workspace server",
+    "db:seed": "npm run db:seed --workspace server"
   },
   "engines": {
     "node": ">=20"

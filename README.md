@@ -2,16 +2,17 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 1 provides the runnable foundation only: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, and a health endpoint.
+Milestone 2 provides the runnable foundation and database schema: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, and development seed data.
 
 ## Tech Stack
 
 * React, Vite, TypeScript
 * Node.js, Express, TypeScript
 * PostgreSQL with Prisma ORM
+* bcrypt password hashing for seeded development users
 * npm workspaces
 
-JWT authentication, bcrypt, domain models, background jobs, LLM integration, email, and Google Calendar are planned for later milestones.
+JWT authentication endpoints, business workflows, background job processing, LLM integration, email, and Google Calendar are planned for later milestones.
 
 ## Project Structure
 
@@ -23,9 +24,9 @@ docs/     Project documentation added in later milestones
 
 ## Environment Variables
 
-Copy `.env.example` values into your local environment or a local `.env` file when needed. Do not commit `.env`.
+Copy `.env.example` values into your local environment or `server/.env` when running server-side Prisma commands locally. Do not commit `.env` files.
 
-Current Milestone 1 variables:
+Current variables:
 
 * `PORT` - API server port, defaults to `4000`
 * `CLIENT_URL` - frontend origin allowed by CORS
@@ -40,15 +41,63 @@ The remaining variables in `.env.example` are placeholders for future milestones
 npm install
 ```
 
-## Prisma
+## Database Schema
 
-Prisma is configured for PostgreSQL in `server/prisma/schema.prisma`. Milestone 1 intentionally does not define domain models yet.
+Prisma is configured for PostgreSQL in `server/prisma/schema.prisma`. The current schema includes:
+
+* `User`
+* `DoctorProfile`
+* `DoctorAvailability`
+* `DoctorLeave`
+* `Appointment`
+* `SlotReservation`
+* `Prescription`
+* `MedicationReminder`
+* `OutboxJob`
+
+The migration also creates a PostgreSQL partial unique index named `SlotReservation_active_doctor_start_key` on active slot reservations. It protects `(doctorId, startAt)` when reservation status is `HOLD` or `BOOKED`, which is the database foundation for later double-booking prevention.
+
+## Database Migration
 
 Generate the Prisma client:
 
 ```bash
 npm run prisma:generate
 ```
+
+Validate the schema:
+
+```bash
+npm run prisma:validate
+```
+
+Apply migrations:
+
+```bash
+npm run db:migrate
+```
+
+## Seed Data
+
+Seed development records:
+
+```bash
+npm run db:seed
+```
+
+The seed creates one admin, one patient, three doctors with different specializations, and weekday availability schedules for each doctor.
+
+Development-only credentials:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@example.com` | `Password123!` |
+| Patient | `patient@example.com` | `Password123!` |
+| Doctor | `maya.patel@example.com` | `Password123!` |
+| Doctor | `noah.williams@example.com` | `Password123!` |
+| Doctor | `aisha.khan@example.com` | `Password123!` |
+
+These credentials are for local/development use only. The database stores bcrypt password hashes.
 
 ## Run
 
@@ -98,4 +147,4 @@ Returns:
 
 ## Current Limitations
 
-Milestone 1 does not include authentication, domain models, migrations, seed data, appointment workflows, tests, LLM integration, email, Google Calendar, or background jobs. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 2 does not include authentication endpoints, authorization middleware, appointment booking APIs, business workflows, automated tests, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.

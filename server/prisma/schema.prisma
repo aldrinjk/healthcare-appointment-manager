@@ -6,3 +6,220 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum UserRole {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum AppointmentStatus {
+  BOOKED
+  COMPLETED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  HOLD
+  BOOKED
+  EXPIRED
+  RELEASED
+  CANCELLED
+}
+
+enum AiSummaryStatus {
+  NOT_REQUESTED
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum PrescriptionFrequency {
+  ONCE_DAILY
+  TWICE_DAILY
+  THREE_TIMES_DAILY
+  AS_NEEDED
+}
+
+enum MedicationReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum OutboxJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id                  String            @id @default(cuid())
+  name                String
+  email               String            @unique
+  passwordHash        String
+  role                UserRole
+  doctorProfile       DoctorProfile?
+  patientAppointments Appointment[]     @relation("PatientAppointments")
+  patientReservations SlotReservation[] @relation("PatientReservations")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([role])
+}
+
+model DoctorProfile {
+  id                  String               @id @default(cuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialization      String
+  bio                 String?
+  slotDurationMinutes Int                  @default(30)
+  availabilities      DoctorAvailability[]
+  leaves              DoctorLeave[]
+  appointments        Appointment[]        @relation("DoctorAppointments")
+  reservations        SlotReservation[]    @relation("DoctorReservations")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([specialization])
+}
+
+model DoctorAvailability {
+  id        String        @id @default(cuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  weekday   Weekday
+  startTime String        @db.VarChar(5)
+  endTime   String        @db.VarChar(5)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([doctorId, weekday, startTime, endTime])
+  @@index([doctorId, weekday])
+}
+
+model DoctorLeave {
+  id        String        @id @default(cuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      DateTime      @db.Date
+  reason    String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([doctorId, date])
+  @@index([date])
+}
+
+model Appointment {
+  id                    String            @id @default(cuid())
+  patientId             String
+  patient               User              @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Restrict)
+  doctorId              String
+  doctor                DoctorProfile     @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Restrict)
+  slotReservation       SlotReservation?
+  startAt               DateTime
+  endAt                 DateTime
+  status                AppointmentStatus @default(BOOKED)
+  symptoms              String?
+  preVisitSummary       Json?
+  preSummaryStatus      AiSummaryStatus   @default(NOT_REQUESTED)
+  urgency               UrgencyLevel?
+  clinicalNotes         String?
+  postVisitSummary      Json?
+  postSummaryStatus     AiSummaryStatus   @default(NOT_REQUESTED)
+  googleCalendarEventId String?
+  cancelledAt           DateTime?
+  prescriptions         Prescription[]
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([patientId, startAt])
+  @@index([doctorId, startAt])
+  @@index([status])
+}
+
+model SlotReservation {
+  id            String            @id @default(cuid())
+  doctorId      String
+  doctor        DoctorProfile     @relation("DoctorReservations", fields: [doctorId], references: [id], onDelete: Restrict)
+  patientId     String
+  patient       User              @relation("PatientReservations", fields: [patientId], references: [id], onDelete: Restrict)
+  appointmentId String?           @unique
+  appointment   Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  startAt       DateTime
+  expiresAt     DateTime?
+  status        ReservationStatus @default(HOLD)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([doctorId, startAt])
+  @@index([patientId])
+  @@index([status, expiresAt])
+}
+
+model Prescription {
+  id            String                @id @default(cuid())
+  appointmentId String
+  appointment   Appointment           @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  medicineName  String
+  dosage        String
+  frequency     PrescriptionFrequency
+  durationDays  Int
+  instructions  String?
+  reminders     MedicationReminder[]
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([appointmentId])
+}
+
+model MedicationReminder {
+  id             String                   @id @default(cuid())
+  prescriptionId String
+  prescription   Prescription             @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  scheduledAt    DateTime
+  status         MedicationReminderStatus @default(PENDING)
+  attempts       Int                      @default(0)
+  lastError      String?
+  sentAt         DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([prescriptionId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model OutboxJob {
+  id            String          @id @default(cuid())
+  type          String
+  payload       Json
+  status        OutboxJobStatus @default(PENDING)
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime        @default(now())
+  lastError     String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([type])
+}

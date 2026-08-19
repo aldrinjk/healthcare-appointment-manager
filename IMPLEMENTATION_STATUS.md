@@ -2,49 +2,50 @@
 
 ## Current Milestone
 
-Milestone 1 - Foundation
+Milestone 3 - Authentication and RBAC is next. Milestone 3 has not been started.
 
 ## Completed
 
-* Created root npm workspace configuration.
-* Created React + Vite + TypeScript client in `client/`.
-* Created Express + TypeScript server in `server/`.
-* Configured Prisma for PostgreSQL without Milestone 2 domain models.
-* Added environment parsing with safe defaults where appropriate.
-* Added centralized JSON error handling.
-* Added `GET /api/health`, returning HTTP 200 with `{"status":"ok"}`.
-* Added root `.gitignore`.
-* Added `.env.example` with safe placeholders only.
-* Added README skeleton with current setup, build, run, and API instructions.
+* Milestone 1 - Foundation.
+* Milestone 2 - Database Schema.
+* Added Prisma enums for user roles, weekdays, appointment status, reservation status, AI summary status, urgency, prescription frequency, medication reminder status, and outbox job status.
+* Added Prisma models: `User`, `DoctorProfile`, `DoctorAvailability`, `DoctorLeave`, `Appointment`, `SlotReservation`, `Prescription`, `MedicationReminder`, and `OutboxJob`.
+* Added relations, timestamps, indexes, and basic database check constraints.
+* Added PostgreSQL partial unique index `SlotReservation_active_doctor_start_key` for active `HOLD`/`BOOKED` reservations by doctor/start time.
+* Created and applied initial migration `20260819214217_init_schema` against the configured PostgreSQL database.
+* Added idempotent development seed script.
+* Seeded one admin, one patient, three doctors, and weekday doctor availability schedules.
+* Documented working migration, seed, and development credential instructions in README.
 
 ## In Progress
 
-None for Milestone 1.
+None.
 
 ## Tests Passing
 
-Milestone 1 verification completed on 2026-08-20:
+Milestone 2 verification completed on 2026-08-20:
 
 * `npm.cmd install` - passed.
-* `npm.cmd audit --audit-level=moderate` - passed with 0 vulnerabilities.
+* `npm.cmd run prisma:validate` - passed.
 * `npm.cmd run prisma:generate` - passed.
+* `npm.cmd run prisma:migrate --workspace server -- --name init_schema --create-only` - passed.
+* `npm.cmd run prisma:migrate --workspace server` - passed and applied migration `20260819214217_init_schema`.
+* `npm.cmd run db:seed` - passed with 5 users, 3 doctors, and 15 availability rules.
+* Read-only database verification - passed with 1 admin, 1 patient, 3 doctors, 15 availability rules, and active slot index present.
 * `npm.cmd run build:client` - passed.
 * `npm.cmd run typecheck:server` - passed.
 * `npm.cmd run build:server` - passed.
-* `npm.cmd run prisma:validate --workspace server` with `DATABASE_URL` supplied - passed.
-* Started compiled backend with safe local environment values - passed.
-* Verified `GET http://localhost:4000/api/health` returned `{"status":"ok"}` - passed.
-* `git status --short` inspected - no tracked secrets or build artifacts detected.
+* `npm.cmd audit --audit-level=moderate` - passed with 0 vulnerabilities.
 
 ## Known Issues
 
-* Prisma CLI commands require `DATABASE_URL` to be supplied through the environment or a local untracked `.env` file.
-* No automated application tests exist yet; testing begins in later milestones when behavior is added.
+* Prisma and seed commands require a valid local `server/.env` with `DATABASE_URL`.
+* No automated application tests exist yet; critical tests begin after behavior is implemented in later milestones.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 1.
+None for Milestone 2.
 
 ## Next Action
 
-Begin Milestone 2 - Database Schema by adding the required domain models, migrations, and development seed data.
+Begin Milestone 3 - Authentication and RBAC by implementing registration/login, JWT handling, bcrypt verification, authentication middleware, role middleware, and authorization tests.
