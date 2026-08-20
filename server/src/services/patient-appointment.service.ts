@@ -7,6 +7,7 @@ import {
 
 import { AppError } from "../middleware/app-error.js";
 import { getBaseSlotsForDoctorDate } from "./doctor.service.js";
+import { getPostVisitSummaryFallback } from "./post-visit-summary.service.js";
 import { prisma } from "../utils/prisma.js";
 
 export const cancellationOutboxJobTypes = [
@@ -99,6 +100,9 @@ function toPatientAppointment(appointment: PatientAppointmentRecord) {
     preSummaryStatus: appointment.preSummaryStatus,
     postSummaryStatus: appointment.postSummaryStatus,
     postVisitSummary: appointment.postVisitSummary,
+    postVisitSummaryFallback: getPostVisitSummaryFallback(
+      appointment.postSummaryStatus
+    ),
     urgency: appointment.urgency,
     followUpInstructions: appointment.followUpInstructions,
     prescriptions: appointment.prescriptions,

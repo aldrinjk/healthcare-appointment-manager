@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Milestone 12 - Post-Visit AI Summary is next. Milestone 11 is complete.
+Milestone 13 - Medication Reminders is next. Milestone 12 is complete.
 
 ## Completed
 
@@ -17,6 +17,7 @@ Milestone 12 - Post-Visit AI Summary is next. Milestone 11 is complete.
 * Milestone 9 - Doctor Leave Conflict Handling.
 * Milestone 10 - Pre-Visit AI Summary.
 * Milestone 11 - Doctor Visit Completion.
+* Milestone 12 - Post-Visit AI Summary.
 * Extended admin-only `POST /api/admin/doctors/:id/leave` to handle existing booked appointments on the leave date.
 * Leave creation now uses a PostgreSQL serializable Prisma transaction with bounded retry for serialization conflicts.
 * Leave creation validates the doctor/date, prevents duplicate leave entries, creates the leave, cancels affected `BOOKED` appointments, releases linked `BOOKED` reservations as `RELEASED`, and creates durable outbox jobs atomically.
@@ -43,10 +44,21 @@ Milestone 12 - Post-Visit AI Summary is next. Milestone 11 is complete.
 * Doctor appointment responses include safe patient identity, appointment time/status, symptoms, urgency, pre-visit summary data/status, fallback text when pre-summary failed, clinical notes, follow-up instructions, post-summary status, and prescriptions where present.
 * Added transactional doctor visit completion at `POST /api/doctor/appointments/:id/complete`.
 * Visit completion verifies the assigned doctor owns the appointment, requires `BOOKED`, rejects `CANCELLED` and already `COMPLETED` appointments, stores clinical notes/follow-up instructions, creates prescription records, marks the appointment `COMPLETED`, sets `postSummaryStatus` to `PENDING`, and creates exactly one `POST_VISIT_SUMMARY` outbox job atomically.
-* Completion creates no post-visit LLM output yet; the durable `POST_VISIT_SUMMARY` job is for Milestone 12.
+* Completion still performs no post-visit LLM call inside the doctor request; the durable `POST_VISIT_SUMMARY` job is processed by the Milestone 12 job handler.
 * Completion runs under PostgreSQL serializable isolation with guarded appointment status updates so simultaneous completion attempts produce exactly one completed visit, one prescription set, and one post-visit job.
 * Tightened patient rescheduling concurrency: after a reschedule outbox job set exists, competing different-hold reschedules return `409`, while repeating the already-booked reservation remains idempotent. This prevents duplicate reschedule job sets under races.
 * Server test files now run with `--test-concurrency=1` to keep database-backed integration tests deterministic against the shared Neon database; explicit in-test race scenarios still use simultaneous requests.
+* Extended the shared LLM abstraction, mock provider, OpenAI provider adapter, and prompt module for post-visit summaries.
+* Added `processPostVisitSummaryJob` and `processPendingPostVisitSummaryJobs` for direct/future-worker processing of `POST_VISIT_SUMMARY` outbox jobs.
+* The post-visit prompt instructs the provider to use only doctor clinical notes, follow-up instructions, and prescriptions; not invent diagnosis, medications, dosage, duration, instructions, or extra medical advice; preserve medically important meaning; use patient-friendly language; and return structured data only.
+* Post-visit provider output is validated before saving.
+* The final stored `postVisitSummary` structure contains `visitSummary`, `medicationSchedule`, and `followUpSteps`.
+* Medication safety uses the safer authoritative approach: the LLM does not provide the saved medication schedule. The saved `medicationSchedule` is constructed directly from persisted `Prescription` rows, so invented or altered AI medication data cannot change doctor-entered medication truth.
+* Successful post-visit processing preserves appointment status `COMPLETED`, clinical notes, follow-up instructions, and prescription rows; stores structured JSON in `Appointment.postVisitSummary`; sets `postSummaryStatus` to `COMPLETED`; and marks the job `COMPLETED`.
+* Provider failures, malformed output, missing required fields, incomplete appointment data, and unsafe AI output leave the appointment `COMPLETED`, preserve doctor-entered data, set `postSummaryStatus` to `FAILED`, and store a safe retryable job failure.
+* Completed `POST_VISIT_SUMMARY` jobs are idempotent and do not call the provider or overwrite an existing valid summary.
+* Failed `POST_VISIT_SUMMARY` jobs are retryable and can later complete successfully without duplicating prescriptions.
+* Patient and doctor appointment response shaping now includes `postVisitSummaryFallback`, which returns `AI summary unavailable.` when `postSummaryStatus` is `FAILED`.
 
 ## In Progress
 
@@ -54,12 +66,28 @@ None.
 
 ## Tests Passing
 
-Milestone 11 verification completed on 2026-08-20:
+Milestone 12 verification completed on 2026-08-20:
 
-* `npx.cmd prisma migrate deploy` - applied `20260820110000_add_follow_up_instructions` successfully against the configured Neon PostgreSQL database.
+* No schema or migration changes were required for Milestone 12; existing `Appointment.postVisitSummary` JSON and `Appointment.postSummaryStatus` fields were sufficient.
 * `npm.cmd run prisma:validate` - passed.
 * `npm.cmd run prisma:generate` - passed.
-* `npm.cmd run test:server` - passed with 180 tests, 0 failures.
+* `node --import tsx --test --test-concurrency=1 "src/tests/post-visit-summary.test.ts"` - passed with 22 tests, 0 failures.
+  * Valid completed appointment generated and stored a structured post-visit summary.
+  * `visitSummary`, authoritative `medicationSchedule`, and `followUpSteps` persisted.
+  * `postSummaryStatus` became `COMPLETED` and the `POST_VISIT_SUMMARY` job became `COMPLETED`.
+  * Appointment status remained `COMPLETED`.
+  * Clinical notes, follow-up instructions, and prescription rows remained unchanged.
+  * Medication authority tests passed: provider-invented medication data was ignored, and saved dosage/frequency/duration/instructions matched persisted doctor prescriptions exactly.
+  * Provider failure left the appointment `COMPLETED`, set `postSummaryStatus` to `FAILED`, marked the job `FAILED`, preserved doctor-entered data, and stored a safe `lastError`.
+  * Malformed provider output and missing required fields failed safely.
+  * Completed-job idempotency passed: no second provider call and no summary overwrite.
+  * Failed-job retry passed: retry success updated summary and job status without duplicating prescriptions.
+  * Incomplete appointment data failed safely.
+  * Fallback helper returned `AI summary unavailable.` for failed post-summary status.
+  * Deterministic mock provider test passed.
+  * Post-visit prompt safety constraints test passed.
+* `npm.cmd run test:server` - passed with 202 tests, 0 failures.
+  * 22 post-visit AI summary tests passed.
   * 27 doctor appointment view / visit completion tests passed.
   * Unauthenticated doctor appointment list returned `401`.
   * Patient/admin access to doctor endpoints returned `403`.
@@ -127,14 +155,14 @@ Milestone 11 verification completed on 2026-08-20:
 * Scheduling currently assumes a single application timezone: UTC.
 * The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, leave-management UI, doctor visit completion UI, or AI summary display.
 * No background cleanup worker exists yet; expired holds are handled lazily for exact-slot replacement.
-* No full outbox worker loop exists yet; Milestone 10 provides the directly invokable `PRE_VISIT_SUMMARY` job handler and Milestone 11 only creates durable `POST_VISIT_SUMMARY` jobs.
+* No full outbox worker loop exists yet; Milestones 10 and 12 provide directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` job handlers.
 * Automated tests and local development use deterministic mock LLM mode unless local OpenAI credentials are explicitly configured.
-* `prisma migrate dev` detected an unrelated existing Neon table named `playing_with_neon` and refused to proceed without a reset. No reset or destructive action was performed. The Milestone 11 migration was applied successfully with `prisma migrate deploy`.
+* A prior unrelated Neon sample table drift involving `playing_with_neon` was removed manually. The latest read-only Prisma/database verification reported migrations up to date and no remaining schema drift.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 11.
+None for Milestone 12.
 
 ## Next Action
 
-Begin Milestone 12 - Post-Visit AI Summary.
+Begin Milestone 13 - Medication Reminders.

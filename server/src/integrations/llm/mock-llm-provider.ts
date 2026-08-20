@@ -2,6 +2,7 @@ import { UrgencyLevel } from "@prisma/client";
 
 import type {
   LlmProvider,
+  PostVisitSummaryInput,
   PreVisitSummaryInput
 } from "./llm-provider.js";
 
@@ -46,6 +47,23 @@ export class MockLlmProvider implements LlmProvider {
         "Have the symptoms changed or worsened since they began?",
         "What makes the symptoms better or worse?"
       ]
+    };
+  }
+
+  async generatePostVisitSummary(input: PostVisitSummaryInput) {
+    const firstClinicalNote =
+      input.clinicalNotes
+        .split(/[.!?]/)
+        .map((part) => part.trim())
+        .find(Boolean) ?? input.clinicalNotes.trim();
+
+    const followUpSteps = input.followUpInstructions?.trim()
+      ? [input.followUpInstructions.trim()]
+      : ["No follow-up instructions were provided by the doctor."];
+
+    return {
+      visitSummary: `Your doctor documented: ${firstClinicalNote}.`,
+      followUpSteps
     };
   }
 }

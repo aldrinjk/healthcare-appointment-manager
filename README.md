@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 11 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, and doctor visit completion: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, a directly invokable `PRE_VISIT_SUMMARY` outbox job handler, doctor appointment list/detail APIs, and transactional visit completion with prescriptions.
+Milestone 12 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, doctor visit completion, and post-visit AI summary processing: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` outbox job handlers, doctor appointment list/detail APIs, and transactional visit completion with prescriptions.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ Milestone 11 provides the runnable foundation, database schema, authentication/R
 * JWT authentication
 * npm workspaces
 
-The full background worker loop, post-visit AI summary execution, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit AI summary processing is implemented as an outbox job handler that future worker code can invoke.
+The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit and post-visit AI summary processing are implemented as outbox job handlers that future worker code can invoke.
 
 ## Project Structure
 
@@ -511,7 +511,56 @@ Completion runs in one PostgreSQL serializable transaction:
 * sets `postSummaryStatus` to `PENDING`
 * creates exactly one durable `POST_VISIT_SUMMARY` outbox job
 
-The `POST_VISIT_SUMMARY` payload contains the appointment identifier only. No post-visit LLM call runs inside the doctor request; Milestone 12 will process the durable job asynchronously.
+The `POST_VISIT_SUMMARY` payload contains the appointment identifier only. No post-visit LLM call runs inside the doctor request; post-visit summary generation is handled by the durable job processor described below.
+
+### Post-Visit AI Summary
+
+Doctor visit completion creates a durable `POST_VISIT_SUMMARY` outbox job. Milestone 12 implements `processPostVisitSummaryJob`, which can be invoked directly now and by a generic worker later.
+
+Logical persisted summary shape:
+
+```json
+{
+  "visitSummary": "Your doctor documented: findings consistent with reported symptoms.",
+  "medicationSchedule": [
+    {
+      "medicine": "Amoxicillin",
+      "dosage": "500mg",
+      "frequency": "TWICE_DAILY",
+      "durationDays": 5,
+      "instructions": "Take after food"
+    }
+  ],
+  "followUpSteps": [
+    "Return if symptoms worsen or do not improve."
+  ]
+}
+```
+
+Medication data is authoritative from the database, not the LLM. The provider is asked only for patient-friendly explanatory text and follow-up steps; the saved `medicationSchedule` is constructed from persisted `Prescription` rows so the AI cannot add a medicine, change a dose, change frequency, change duration, or change instructions.
+
+The post-visit prompt is kept in `server/src/integrations/llm/prompts.ts`. It instructs the provider to use only doctor notes, follow-up instructions, and prescription information; not invent diagnosis, medications, dosage, duration, instructions, or extra medical advice; preserve medically important meaning; use patient-friendly language; and return structured data only.
+
+On success, the service:
+
+* preserves the completed appointment status
+* preserves clinical notes, follow-up instructions, and prescription rows
+* stores structured JSON in `Appointment.postVisitSummary`
+* sets `postSummaryStatus` to `COMPLETED`
+* marks the `POST_VISIT_SUMMARY` job `COMPLETED`
+
+On provider failure, timeout, malformed output, or incomplete appointment data, the appointment remains `COMPLETED`, doctor-entered data is preserved, `postSummaryStatus` becomes `FAILED`, and the outbox job records a safe retryable failure. Patient/doctor appointment responses can expose this fallback when the post-summary failed:
+
+```text
+AI summary unavailable.
+```
+
+Current provider modes:
+
+* `LLM_PROVIDER=mock` - deterministic development/test provider; no API key or network required.
+* `LLM_PROVIDER=openai` - OpenAI adapter using `LLM_MODEL` and local-only `LLM_API_KEY`.
+
+Completed `POST_VISIT_SUMMARY` jobs are idempotent: they do not call the provider again or overwrite an existing valid summary. Failed jobs can be retried and can later complete successfully without duplicating prescriptions.
 
 ## Timezone Assumption
 
@@ -519,4 +568,4 @@ For the current assignment scope, the application uses one scheduling timezone: 
 
 ## Current Limitations
 
-Milestone 11 does not include the full background worker loop, actual email sending, actual Google Calendar calls, post-visit summary generation, medication reminder scheduling, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.
+Milestone 12 does not include the full background worker loop, actual email sending, actual Google Calendar calls, medication reminder scheduling, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit and post-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.

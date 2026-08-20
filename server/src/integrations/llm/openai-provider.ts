@@ -1,7 +1,10 @@
 import { env } from "../../config/env.js";
 import { AppError } from "../../middleware/app-error.js";
 import { LlmProviderError, type LlmProvider } from "./llm-provider.js";
-import { buildPreVisitSummaryPrompt } from "./prompts.js";
+import {
+  buildPostVisitSummaryPrompt,
+  buildPreVisitSummaryPrompt
+} from "./prompts.js";
 
 type OpenAiProviderOptions = {
   apiKey?: string;
@@ -89,6 +92,71 @@ export class OpenAiProvider implements LlmProvider {
 
     if (!response.ok) {
       throw new LlmProviderError("OpenAI pre-visit summary request failed");
+    }
+
+    const body = (await response.json()) as OpenAiResponsesBody;
+    const outputText = extractOutputText(body);
+
+    if (!outputText) {
+      throw new LlmProviderError("OpenAI response did not include structured output");
+    }
+
+    try {
+      return JSON.parse(outputText) as unknown;
+    } catch {
+      throw new LlmProviderError("OpenAI response was not valid JSON");
+    }
+  }
+
+  async generatePostVisitSummary(input: {
+    clinicalNotes: string;
+    followUpInstructions: string | null;
+    prescriptions: Array<{
+      medicine: string;
+      dosage: string;
+      frequency: string;
+      durationDays: number;
+      instructions: string | null;
+    }>;
+  }) {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: buildPostVisitSummaryPrompt(input),
+        text: {
+          format: {
+            type: "json_schema",
+            name: "post_visit_summary",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["visitSummary", "followUpSteps"],
+              properties: {
+                visitSummary: {
+                  type: "string"
+                },
+                followUpSteps: {
+                  type: "array",
+                  minItems: 1,
+                  items: {
+                    type: "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new LlmProviderError("OpenAI post-visit summary request failed");
     }
 
     const body = (await response.json()) as OpenAiResponsesBody;

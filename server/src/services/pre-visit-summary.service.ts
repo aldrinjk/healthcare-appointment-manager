@@ -37,7 +37,7 @@ const outboxPayloadSchema = z
   .passthrough();
 
 type ProcessPreVisitSummaryOptions = {
-  provider?: LlmProvider;
+  provider?: Pick<LlmProvider, "generatePreVisitSummary">;
   now?: Date;
 };
 

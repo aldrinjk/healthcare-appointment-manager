@@ -7,10 +7,14 @@ import {
 } from "@prisma/client";
 
 import { getPreVisitSummaryFallback } from "./pre-visit-summary.service.js";
+import {
+  getPostVisitSummaryFallback,
+  postVisitSummaryJobType
+} from "./post-visit-summary.service.js";
 import { AppError } from "../middleware/app-error.js";
 import { prisma } from "../utils/prisma.js";
 
-export const postVisitSummaryJobType = "POST_VISIT_SUMMARY";
+export { postVisitSummaryJobType };
 export const maxClinicalNotesLength = 10_000;
 export const maxFollowUpInstructionsLength = 5_000;
 export const maxPrescriptionItems = 20;
@@ -97,6 +101,9 @@ function toDoctorAppointmentResponse(appointment: DoctorAppointmentRecord) {
     followUpInstructions: appointment.followUpInstructions,
     postSummaryStatus: appointment.postSummaryStatus,
     postVisitSummary: appointment.postVisitSummary,
+    postVisitSummaryFallback: getPostVisitSummaryFallback(
+      appointment.postSummaryStatus
+    ),
     prescriptions: appointment.prescriptions.map((prescription) => ({
       id: prescription.id,
       medicine: prescription.medicineName,
