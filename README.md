@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 3 provides the runnable foundation, database schema, and authentication/RBAC layer: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, and role middleware.
+Milestone 4 provides the runnable foundation, database schema, authentication/RBAC layer, and admin doctor-management APIs: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, and leave record management.
 
 ## Tech Stack
 
@@ -184,6 +184,63 @@ Required JSON body:
 
 Requires an `Authorization: Bearer <token>` header and returns the authenticated user without `passwordHash`.
 
+### Admin Doctor Management
+
+All admin doctor-management endpoints require `Authorization: Bearer <token>` for an authenticated admin user. Authenticated non-admin users receive `403`; unauthenticated requests receive `401`.
+
+Implemented endpoints:
+
+* `GET /api/admin/doctors`
+* `POST /api/admin/doctors`
+* `GET /api/admin/doctors/:id`
+* `PATCH /api/admin/doctors/:id`
+* `POST /api/admin/doctors/:id/availability`
+* `POST /api/admin/doctors/:id/leave`
+* `DELETE /api/admin/doctors/:id/leave/:leaveId`
+
+Create doctor request:
+
+```json
+{
+  "name": "Dr. Example",
+  "email": "doctor@example.com",
+  "password": "Password123!",
+  "specialization": "Cardiology",
+  "slotDuration": 30
+}
+```
+
+Update doctor request supports safe fields only:
+
+```json
+{
+  "name": "Dr. Updated",
+  "specialization": "Dermatology",
+  "slotDuration": 20
+}
+```
+
+Create availability request:
+
+```json
+{
+  "weekday": "MONDAY",
+  "startTime": "09:00",
+  "endTime": "17:00"
+}
+```
+
+Create leave request:
+
+```json
+{
+  "date": "2026-09-15",
+  "reason": "Conference"
+}
+```
+
+Milestone 4 creates and removes leave records only. Appointment cancellation caused by doctor leave is intentionally deferred to Milestone 9.
+
 ## Current Limitations
 
-Milestone 3 does not include doctor management APIs, appointment booking APIs, business workflows, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 4 does not include patient doctor search, slot generation, slot holds, appointment booking APIs, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
