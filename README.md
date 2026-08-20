@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 6 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, and patient slot holds: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, and temporary hold reservations.
+Milestone 7 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, and appointment booking confirmation: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, and durable booking outbox jobs.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ Milestone 6 provides the runnable foundation, database schema, authentication/RB
 * JWT authentication
 * npm workspaces
 
-Business workflows, background job processing, LLM integration, email, and Google Calendar are planned for later milestones.
+Background job processing, LLM execution, email sending, and Google Calendar API calls are planned for later milestones.
 
 ## Project Structure
 
@@ -298,10 +298,50 @@ Successful response:
 
 Holds expire after approximately five minutes. The service lazily marks expired conflicting holds as `EXPIRED` before attempting a replacement hold, then relies on the PostgreSQL partial unique index on active slot reservations to choose the winner under race conditions. If the same patient requests a slot they already actively hold, the API returns the existing reservation with HTTP `200`.
 
+### Appointment Booking
+
+`POST /api/appointments` requires a patient Bearer token. Doctors and admins receive `403`; unauthenticated requests receive `401`.
+
+Request:
+
+```json
+{
+  "reservationId": "held-reservation-id",
+  "symptoms": "Persistent cough and mild fever."
+}
+```
+
+Successful response:
+
+```json
+{
+  "appointment": {
+    "id": "appointment-id",
+    "doctorId": "doctor-profile-id",
+    "startAt": "2026-09-21T09:00:00.000Z",
+    "endAt": "2026-09-21T09:30:00.000Z",
+    "status": "BOOKED",
+    "symptoms": "Persistent cough and mild fever.",
+    "preSummaryStatus": "PENDING"
+  }
+}
+```
+
+Booking converts a patient-owned, unexpired `HOLD` reservation into one `BOOKED` appointment inside a single Prisma transaction. The transaction also links the reservation to the appointment and creates four durable `PENDING` outbox jobs:
+
+* `BOOKING_CONFIRMATION_PATIENT`
+* `BOOKING_CONFIRMATION_DOCTOR`
+* `PRE_VISIT_SUMMARY`
+* `CALENDAR_CREATE`
+
+No email provider, LLM provider, or Google Calendar API is called inside the booking transaction. External processing is deferred to future workers so provider failures cannot roll back an already committed appointment.
+
+Repeated confirmation of an already-booked patient-owned reservation returns the existing appointment and does not create duplicate appointments or duplicate outbox jobs.
+
 ## Timezone Assumption
 
 For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
 
 ## Current Limitations
 
-Milestone 6 does not include appointment confirmation, symptom submission, appointment booking APIs, rescheduling, cancellation, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 7 does not include outbox workers, email sending, LLM calls, Google Calendar calls, rescheduling, cancellation, leave-triggered appointment cancellation, doctor visit completion, prescriptions, medication reminders, or frontend booking UI. Those are scheduled in later milestones in `PROJECT_PLAN.md`.

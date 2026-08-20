@@ -57,6 +57,11 @@ type DateRange = {
   dateKey: string;
 };
 
+type DoctorSlotReader = Pick<
+  typeof prisma,
+  "doctorProfile" | "slotReservation" | "appointment"
+>;
+
 function toPublicDoctor(doctor: DoctorPublicRecord) {
   return {
     id: doctor.id,
@@ -227,10 +232,11 @@ export async function getPublicDoctor(doctorId: string) {
 export async function getBaseSlotsForDoctorDate(
   doctorId: string,
   date: string,
-  now = new Date()
+  now = new Date(),
+  db: Pick<DoctorSlotReader, "doctorProfile"> = prisma
 ) {
   const { dateStart, dateKey } = parseDateParam(date);
-  const doctor = await prisma.doctorProfile.findUnique({
+  const doctor = await db.doctorProfile.findUnique({
     where: { id: doctorId },
     select: {
       id: true,
@@ -283,13 +289,14 @@ export async function getBaseSlotsForDoctorDate(
 export async function getAvailableSlots(
   doctorId: string,
   date: string,
-  now = new Date()
+  now = new Date(),
+  db: DoctorSlotReader = prisma
 ) {
   const { dateStart, dateEnd } = parseDateParam(date);
-  const baseSlots = await getBaseSlotsForDoctorDate(doctorId, date, now);
+  const baseSlots = await getBaseSlotsForDoctorDate(doctorId, date, now, db);
 
   const [reservations, appointments] = await Promise.all([
-    prisma.slotReservation.findMany({
+    db.slotReservation.findMany({
       where: {
         doctorId,
         startAt: {
@@ -306,7 +313,7 @@ export async function getAvailableSlots(
         expiresAt: true
       }
     }),
-    prisma.appointment.findMany({
+    db.appointment.findMany({
       where: {
         doctorId,
         startAt: {
