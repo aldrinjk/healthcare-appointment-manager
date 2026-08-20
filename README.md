@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 4 provides the runnable foundation, database schema, authentication/RBAC layer, and admin doctor-management APIs: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, and leave record management.
+Milestone 5 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, and patient-facing doctor discovery with slot generation: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, and available appointment slots.
 
 ## Tech Stack
 
@@ -135,7 +135,7 @@ npm run typecheck:server
 npm run build:server
 ```
 
-Run backend auth/RBAC tests:
+Run backend tests:
 
 ```bash
 npm run test:server
@@ -241,6 +241,38 @@ Create leave request:
 
 Milestone 4 creates and removes leave records only. Appointment cancellation caused by doctor leave is intentionally deferred to Milestone 9.
 
+### Public Doctor Discovery
+
+These endpoints are public and return safe doctor/profile data only. They do not expose `passwordHash` or private authentication fields.
+
+Implemented endpoints:
+
+* `GET /api/doctors`
+* `GET /api/doctors?specialization=Cardiology`
+* `GET /api/doctors/:id`
+* `GET /api/doctors/:id/slots?date=YYYY-MM-DD`
+
+Slot responses use UTC ISO timestamps:
+
+```json
+{
+  "date": "2026-09-21",
+  "timeZone": "UTC",
+  "slots": [
+    {
+      "startAt": "2026-09-21T09:00:00.000Z",
+      "endAt": "2026-09-21T09:30:00.000Z"
+    }
+  ]
+}
+```
+
+Slot generation considers the doctor's weekday availability, slot duration, leave records, active `HOLD` reservations, `BOOKED` reservations, non-cancelled appointments, expired holds, and past times.
+
+## Timezone Assumption
+
+For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
+
 ## Current Limitations
 
-Milestone 4 does not include patient doctor search, slot generation, slot holds, appointment booking APIs, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 5 does not include slot hold creation, appointment booking APIs, rescheduling, cancellation, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
