@@ -2,17 +2,18 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 2 provides the runnable foundation and database schema: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, and development seed data.
+Milestone 3 provides the runnable foundation, database schema, and authentication/RBAC layer: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, and role middleware.
 
 ## Tech Stack
 
 * React, Vite, TypeScript
 * Node.js, Express, TypeScript
 * PostgreSQL with Prisma ORM
-* bcrypt password hashing for seeded development users
+* bcrypt password hashing
+* JWT authentication
 * npm workspaces
 
-JWT authentication endpoints, business workflows, background job processing, LLM integration, email, and Google Calendar are planned for later milestones.
+Business workflows, background job processing, LLM integration, email, and Google Calendar are planned for later milestones.
 
 ## Project Structure
 
@@ -31,6 +32,7 @@ Current variables:
 * `PORT` - API server port, defaults to `4000`
 * `CLIENT_URL` - frontend origin allowed by CORS
 * `DATABASE_URL` - PostgreSQL connection string used by Prisma
+* `JWT_SECRET` - local secret used to sign and verify JWTs
 * `VITE_API_URL` - client API base URL
 
 The remaining variables in `.env.example` are placeholders for future milestones and contain no real credentials.
@@ -133,6 +135,12 @@ npm run typecheck:server
 npm run build:server
 ```
 
+Run backend auth/RBAC tests:
+
+```bash
+npm run test:server
+```
+
 ## API
 
 ### `GET /api/health`
@@ -145,6 +153,37 @@ Returns:
 }
 ```
 
+### `POST /api/auth/register`
+
+Public patient registration. Creates `PATIENT` users only.
+
+Required JSON body:
+
+```json
+{
+  "name": "Patient Name",
+  "email": "patient@example.com",
+  "password": "Password123!"
+}
+```
+
+### `POST /api/auth/login`
+
+Authenticates an existing user and returns a signed JWT plus safe user data.
+
+Required JSON body:
+
+```json
+{
+  "email": "patient@example.com",
+  "password": "Password123!"
+}
+```
+
+### `GET /api/auth/me`
+
+Requires an `Authorization: Bearer <token>` header and returns the authenticated user without `passwordHash`.
+
 ## Current Limitations
 
-Milestone 2 does not include authentication endpoints, authorization middleware, appointment booking APIs, business workflows, automated tests, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 3 does not include doctor management APIs, appointment booking APIs, business workflows, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.

@@ -11,6 +11,7 @@
     "dev:server": "npm run dev --workspace server",
     "build:client": "npm run build --workspace client",
     "build:server": "npm run build --workspace server",
+    "test:server": "npm run test --workspace server",
     "typecheck:server": "npm run typecheck --workspace server",
     "prisma:generate": "npm run prisma:generate --workspace server",
     "prisma:validate": "npm run prisma:validate --workspace server",
