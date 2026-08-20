@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 5 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, and patient-facing doctor discovery with slot generation: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, and available appointment slots.
+Milestone 6 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, and patient slot holds: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, and temporary hold reservations.
 
 ## Tech Stack
 
@@ -269,10 +269,39 @@ Slot responses use UTC ISO timestamps:
 
 Slot generation considers the doctor's weekday availability, slot duration, leave records, active `HOLD` reservations, `BOOKED` reservations, non-cancelled appointments, expired holds, and past times.
 
+### Slot Holds
+
+`POST /api/appointments/hold` requires a patient Bearer token. Doctors and admins receive `403`; unauthenticated requests receive `401`.
+
+Request:
+
+```json
+{
+  "doctorId": "doctor-profile-id",
+  "startAt": "2026-09-21T09:00:00.000Z"
+}
+```
+
+Successful response:
+
+```json
+{
+  "reservation": {
+    "id": "reservation-id",
+    "doctorId": "doctor-profile-id",
+    "startAt": "2026-09-21T09:00:00.000Z",
+    "expiresAt": "2026-09-21T09:05:00.000Z",
+    "status": "HOLD"
+  }
+}
+```
+
+Holds expire after approximately five minutes. The service lazily marks expired conflicting holds as `EXPIRED` before attempting a replacement hold, then relies on the PostgreSQL partial unique index on active slot reservations to choose the winner under race conditions. If the same patient requests a slot they already actively hold, the API returns the existing reservation with HTTP `200`.
+
 ## Timezone Assumption
 
 For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
 
 ## Current Limitations
 
-Milestone 5 does not include slot hold creation, appointment booking APIs, rescheduling, cancellation, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 6 does not include appointment confirmation, symptom submission, appointment booking APIs, rescheduling, cancellation, leave-triggered appointment cancellation, LLM integration, email, Google Calendar, or background job processing. Those are scheduled in later milestones in `PROJECT_PLAN.md`.

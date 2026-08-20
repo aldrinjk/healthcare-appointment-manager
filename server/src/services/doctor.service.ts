@@ -8,7 +8,7 @@ import {
 import { AppError } from "../middleware/app-error.js";
 import { prisma } from "../utils/prisma.js";
 
-const applicationTimeZone = "UTC";
+export const applicationTimeZone = "UTC";
 
 const doctorPublicSelect = {
   id: true,
@@ -46,6 +46,11 @@ type DoctorPublicRecord = Prisma.DoctorProfileGetPayload<{
   select: typeof doctorPublicSelect;
 }>;
 
+export type GeneratedSlot = {
+  startAt: string;
+  endAt: string;
+};
+
 type DateRange = {
   dateStart: Date;
   dateEnd: Date;
@@ -67,7 +72,7 @@ function toPublicDoctor(doctor: DoctorPublicRecord) {
   };
 }
 
-function parseDateParam(date: string): DateRange {
+export function parseDateParam(date: string): DateRange {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new AppError("Date must use YYYY-MM-DD format", 400, "INVALID_DATE");
   }
@@ -103,6 +108,36 @@ function getWeekday(date: Date) {
 
 function combineDateAndTime(dateKey: string, time: string) {
   return new Date(`${dateKey}T${time}:00.000Z`);
+}
+
+function generateSlotsFromAvailability(
+  dateKey: string,
+  slotDurationMinutes: number,
+  availabilities: Array<{ startTime: string; endTime: string }>,
+  now: Date
+) {
+  const slotDurationMs = slotDurationMinutes * 60 * 1000;
+  const slots: GeneratedSlot[] = [];
+
+  for (const availability of availabilities) {
+    let slotStart = combineDateAndTime(dateKey, availability.startTime);
+    const availabilityEnd = combineDateAndTime(dateKey, availability.endTime);
+
+    while (slotStart.getTime() + slotDurationMs <= availabilityEnd.getTime()) {
+      const slotEnd = new Date(slotStart.getTime() + slotDurationMs);
+
+      if (slotStart.getTime() > now.getTime()) {
+        slots.push({
+          startAt: slotStart.toISOString(),
+          endAt: slotEnd.toISOString()
+        });
+      }
+
+      slotStart = slotEnd;
+    }
+  }
+
+  return slots;
 }
 
 function isBlockedByReservation(
@@ -189,12 +224,12 @@ export async function getPublicDoctor(doctorId: string) {
   return toPublicDoctor(doctor);
 }
 
-export async function getAvailableSlots(
+export async function getBaseSlotsForDoctorDate(
   doctorId: string,
   date: string,
   now = new Date()
 ) {
-  const { dateStart, dateEnd, dateKey } = parseDateParam(date);
+  const { dateStart, dateKey } = parseDateParam(date);
   const doctor = await prisma.doctorProfile.findUnique({
     where: { id: doctorId },
     select: {
@@ -229,9 +264,29 @@ export async function getAvailableSlots(
     return {
       date,
       timeZone: applicationTimeZone,
-      slots: []
+      slots: [] as GeneratedSlot[]
     };
   }
+
+  return {
+    date,
+    timeZone: applicationTimeZone,
+    slots: generateSlotsFromAvailability(
+      dateKey,
+      doctor.slotDurationMinutes,
+      doctor.availabilities,
+      now
+    )
+  };
+}
+
+export async function getAvailableSlots(
+  doctorId: string,
+  date: string,
+  now = new Date()
+) {
+  const { dateStart, dateEnd } = parseDateParam(date);
+  const baseSlots = await getBaseSlotsForDoctorDate(doctorId, date, now);
 
   const [reservations, appointments] = await Promise.all([
     prisma.slotReservation.findMany({
@@ -269,35 +324,18 @@ export async function getAvailableSlots(
     })
   ]);
 
-  const slotDurationMs = doctor.slotDurationMinutes * 60 * 1000;
-  const slots: Array<{ startAt: string; endAt: string }> = [];
+  const slots = baseSlots.slots.filter((slot) => {
+    const slotStartMs = new Date(slot.startAt).getTime();
 
-  for (const availability of doctor.availabilities) {
-    let slotStart = combineDateAndTime(dateKey, availability.startTime);
-    const availabilityEnd = combineDateAndTime(dateKey, availability.endTime);
-
-    while (slotStart.getTime() + slotDurationMs <= availabilityEnd.getTime()) {
-      const slotEnd = new Date(slotStart.getTime() + slotDurationMs);
-      const slotStartMs = slotStart.getTime();
-      const blocked =
-        slotStartMs <= now.getTime() ||
-        reservations.some((reservation) =>
-          isBlockedByReservation(slotStartMs, reservation, now)
-        ) ||
-        appointments.some((appointment) =>
-          isBlockedByAppointment(slotStartMs, appointment)
-        );
-
-      if (!blocked) {
-        slots.push({
-          startAt: slotStart.toISOString(),
-          endAt: slotEnd.toISOString()
-        });
-      }
-
-      slotStart = slotEnd;
-    }
-  }
+    return (
+      !reservations.some((reservation) =>
+        isBlockedByReservation(slotStartMs, reservation, now)
+      ) &&
+      !appointments.some((appointment) =>
+        isBlockedByAppointment(slotStartMs, appointment)
+      )
+    );
+  });
 
   return {
     date,
