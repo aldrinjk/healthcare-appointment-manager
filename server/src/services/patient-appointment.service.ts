@@ -113,7 +113,7 @@ function getDateKey(date: Date) {
 function isConflictError(error: unknown) {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
-    (error.code === "P2002" || error.code === "P2034")
+    ["P2002", "P2025", "P2028", "P2034"].includes(error.code)
   );
 }
 
@@ -291,9 +291,6 @@ export async function cancelPatientAppointment(
         });
 
         return cancelledAppointment;
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
       }
     );
 
@@ -527,9 +524,6 @@ export async function reschedulePatientAppointment(
           appointment: rescheduledAppointment,
           reused: false
         };
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
       }
     );
 

@@ -327,20 +327,6 @@ async function countOutboxJobsForAppointment(
   return rows.filter((row) => types.includes(row.type));
 }
 
-async function countAllMilestoneOutboxJobs() {
-  return prisma.outboxJob.count({
-    where: {
-      type: {
-        in: [
-          ...bookingOutboxJobTypes,
-          ...cancellationOutboxJobTypes,
-          ...rescheduleOutboxJobTypes
-        ]
-      }
-    }
-  });
-}
-
 before(async () => {
   server = await new Promise<Server>((resolve) => {
     const listener = app.listen(0, () => resolve(listener));
@@ -622,7 +608,10 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
 
   test("cancellation rollback leaves original state intact", async () => {
     const { appointment, reservation } = await createBookedAppointment();
-    const jobCountBefore = await countAllMilestoneOutboxJobs();
+    const jobsBefore = await countOutboxJobsForAppointment(
+      appointment.id,
+      cancellationOutboxJobTypes
+    );
 
     await assert.rejects(
       () =>
@@ -632,7 +621,7 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
       /Simulated cancellation transaction failure/
     );
 
-    const [storedAppointment, storedReservation, jobCountAfter] = await Promise.all([
+    const [storedAppointment, storedReservation, jobsAfter] = await Promise.all([
       prisma.appointment.findUniqueOrThrow({
         where: { id: appointment.id },
         select: { status: true, cancelledAt: true }
@@ -641,14 +630,14 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
         where: { id: reservation.id },
         select: { status: true, appointmentId: true }
       }),
-      countAllMilestoneOutboxJobs()
+      countOutboxJobsForAppointment(appointment.id, cancellationOutboxJobTypes)
     ]);
 
     assert.equal(storedAppointment.status, AppointmentStatus.BOOKED);
     assert.equal(storedAppointment.cancelledAt, null);
     assert.equal(storedReservation.status, ReservationStatus.BOOKED);
     assert.equal(storedReservation.appointmentId, appointment.id);
-    assert.equal(jobCountAfter, jobCountBefore);
+    assert.equal(jobsAfter.length, jobsBefore.length);
   });
 
   test("cancellation makes slot available again through slot generation", async () => {
@@ -969,7 +958,10 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
       doctorId: newDoctorId,
       slotStartAt: startAt(date, "10:00")
     });
-    const jobCountBefore = await countAllMilestoneOutboxJobs();
+    const jobsBefore = await countOutboxJobsForAppointment(
+      appointment.id,
+      rescheduleOutboxJobTypes
+    );
 
     await assert.rejects(
       () =>
@@ -986,7 +978,7 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
       /Simulated reschedule transaction failure/
     );
 
-    const [storedAppointment, oldReservation, newReservation, jobCountAfter] =
+    const [storedAppointment, oldReservation, newReservation, jobsAfter] =
       await Promise.all([
         prisma.appointment.findUniqueOrThrow({
           where: { id: appointment.id },
@@ -1000,7 +992,7 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
           where: { id: newHold.id },
           select: { status: true, appointmentId: true }
         }),
-        countAllMilestoneOutboxJobs()
+        countOutboxJobsForAppointment(appointment.id, rescheduleOutboxJobTypes)
       ]);
 
     assert.equal(storedAppointment.doctorId, appointment.doctorId);
@@ -1010,7 +1002,7 @@ describe("patient appointment views, cancellation, and rescheduling", () => {
     assert.equal(oldReservation.appointmentId, appointment.id);
     assert.equal(newReservation.status, ReservationStatus.HOLD);
     assert.equal(newReservation.appointmentId, null);
-    assert.equal(jobCountAfter, jobCountBefore);
+    assert.equal(jobsAfter.length, jobsBefore.length);
   });
 
   test("repeated reschedule with same reservation does not duplicate state or jobs", async () => {

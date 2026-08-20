@@ -1,5 +1,12 @@
 import bcrypt from "bcrypt";
-import { Prisma, UserRole, Weekday } from "@prisma/client";
+import {
+  AppointmentStatus,
+  OutboxJobStatus,
+  Prisma,
+  ReservationStatus,
+  UserRole,
+  Weekday
+} from "@prisma/client";
 
 import { AppError } from "../middleware/app-error.js";
 import { normalizeEmail, toSafeUser } from "./auth.service.js";
@@ -31,6 +38,19 @@ export type CreateLeaveInput = {
   date: string;
   reason?: string;
 };
+
+export type CreateLeaveOptions = {
+  now?: Date;
+  simulateFailureAfterAppointmentCancellation?: boolean;
+};
+
+export const doctorLeaveCancellationOutboxJobTypes = [
+  "DOCTOR_LEAVE_CANCELLATION_PATIENT",
+  "DOCTOR_LEAVE_CANCELLATION_DOCTOR",
+  "CALENDAR_DELETE"
+] as const;
+
+const serializableRetryLimit = 3;
 
 const doctorSelect = {
   id: true,
@@ -99,14 +119,28 @@ function handleUniqueError(error: unknown, message: string, code: string): never
   throw error;
 }
 
+function isKnownPrismaError(error: unknown, code: string) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === code
+  );
+}
+
 function parseLeaveDate(date: string) {
   const parsed = new Date(`${date}T00:00:00.000Z`);
 
-  if (Number.isNaN(parsed.getTime())) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== date
+  ) {
     throw new AppError("Leave date is invalid", 400, "INVALID_LEAVE_DATE");
   }
 
   return parsed;
+}
+
+function dateEnd(date: Date) {
+  return new Date(date.getTime() + 24 * 60 * 60 * 1000);
 }
 
 export async function listDoctors() {
@@ -254,29 +288,163 @@ export async function addAvailability(
   }
 }
 
-export async function addLeave(doctorId: string, input: CreateLeaveInput) {
-  await getDoctor(doctorId);
+export async function addLeave(
+  doctorId: string,
+  input: CreateLeaveInput,
+  options: CreateLeaveOptions = {}
+) {
+  const leaveDate = parseLeaveDate(input.date);
+  const leaveDateEnd = dateEnd(leaveDate);
+  const now = options.now ?? new Date();
 
-  try {
-    const leave = await prisma.doctorLeave.create({
-      data: {
-        doctorId,
-        date: parseLeaveDate(input.date),
-        reason: input.reason?.trim()
-      },
-      select: {
-        id: true,
-        date: true,
-        reason: true,
-        createdAt: true,
-        updatedAt: true
+  for (let attempt = 1; attempt <= serializableRetryLimit; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const doctor = await tx.doctorProfile.findUnique({
+            where: { id: doctorId },
+            select: {
+              id: true
+            }
+          });
+
+          if (!doctor) {
+            throw new AppError("Doctor not found", 404, "DOCTOR_NOT_FOUND");
+          }
+
+          const leave = await tx.doctorLeave.create({
+            data: {
+              doctorId,
+              date: leaveDate,
+              reason: input.reason?.trim()
+            },
+            select: {
+              id: true,
+              date: true,
+              reason: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+          const affectedAppointments = await tx.appointment.findMany({
+            where: {
+              doctorId,
+              startAt: {
+                gte: leaveDate,
+                lt: leaveDateEnd
+              },
+              status: AppointmentStatus.BOOKED
+            },
+            select: {
+              id: true,
+              patientId: true,
+              doctorId: true
+            }
+          });
+          const affectedAppointmentIds = affectedAppointments.map(
+            (appointment) => appointment.id
+          );
+
+          if (affectedAppointmentIds.length > 0) {
+            await tx.appointment.updateMany({
+              where: {
+                id: {
+                  in: affectedAppointmentIds
+                },
+                status: AppointmentStatus.BOOKED
+              },
+              data: {
+                status: AppointmentStatus.CANCELLED,
+                cancelledAt: now
+              }
+            });
+
+            if (options.simulateFailureAfterAppointmentCancellation) {
+              throw new Error("Simulated doctor leave transaction failure");
+            }
+
+            await tx.slotReservation.updateMany({
+              where: {
+                appointmentId: {
+                  in: affectedAppointmentIds
+                },
+                status: ReservationStatus.BOOKED
+              },
+              data: {
+                status: ReservationStatus.RELEASED,
+                appointmentId: null
+              }
+            });
+
+            await tx.outboxJob.createMany({
+              data: affectedAppointments.flatMap((appointment) => [
+                {
+                  type: "DOCTOR_LEAVE_CANCELLATION_PATIENT",
+                  payload: {
+                    appointmentId: appointment.id,
+                    patientId: appointment.patientId,
+                    doctorId,
+                    leaveId: leave.id
+                  },
+                  status: OutboxJobStatus.PENDING,
+                  attempts: 0,
+                  nextAttemptAt: now
+                },
+                {
+                  type: "DOCTOR_LEAVE_CANCELLATION_DOCTOR",
+                  payload: {
+                    appointmentId: appointment.id,
+                    doctorId,
+                    leaveId: leave.id
+                  },
+                  status: OutboxJobStatus.PENDING,
+                  attempts: 0,
+                  nextAttemptAt: now
+                },
+                {
+                  type: "CALENDAR_DELETE",
+                  payload: {
+                    appointmentId: appointment.id,
+                    doctorId,
+                    leaveId: leave.id
+                  },
+                  status: OutboxJobStatus.PENDING,
+                  attempts: 0,
+                  nextAttemptAt: now
+                }
+              ])
+            });
+          }
+
+          return leave;
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+        }
+      );
+    } catch (error) {
+      if (isKnownPrismaError(error, "P2034") && attempt < serializableRetryLimit) {
+        continue;
       }
-    });
 
-    return leave;
-  } catch (error) {
-    return handleUniqueError(error, "Leave already exists", "LEAVE_ALREADY_EXISTS");
+      if (isKnownPrismaError(error, "P2034")) {
+        throw new AppError(
+          "Leave could not be created due to a concurrent booking change",
+          409,
+          "LEAVE_CREATE_CONFLICT"
+        );
+      }
+
+      return handleUniqueError(error, "Leave already exists", "LEAVE_ALREADY_EXISTS");
+    }
   }
+
+  throw new AppError(
+    "Leave could not be created due to a concurrent booking change",
+    409,
+    "LEAVE_CREATE_CONFLICT"
+  );
 }
 
 export async function removeLeave(doctorId: string, leaveId: string) {

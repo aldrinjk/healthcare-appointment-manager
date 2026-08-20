@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Milestone 9 - Doctor Leave Conflict Handling is next. Milestone 8 is complete.
+Milestone 10 - Pre-Visit AI Summary is next. Milestone 9 is complete.
 
 ## Completed
 
@@ -14,18 +14,16 @@ Milestone 9 - Doctor Leave Conflict Handling is next. Milestone 8 is complete.
 * Milestone 6 - Slot Hold.
 * Milestone 7 - Appointment Booking.
 * Milestone 8 - Appointment Views, Cancellation and Rescheduling.
-* Added patient-only `GET /api/appointments/me`.
-* Added patient-only `GET /api/appointments/:id`.
-* Added patient-only `DELETE /api/appointments/:id`.
-* Added patient-only `PATCH /api/appointments/:id/reschedule`.
-* Appointment view responses return only the authenticated patient's appointments with safe doctor/profile, status, symptoms, summary status, post-visit, and prescription data.
-* Cancellation transactionally marks `BOOKED` appointments as `CANCELLED`, releases the linked `BOOKED` reservation as `RELEASED`, and creates three durable `PENDING` outbox jobs.
-* Repeated cancellation returns `409` and does not create duplicate cancellation jobs.
-* Rescheduling uses a patient-owned active `HOLD`, revalidates UTC schedule/leave/conflict rules, updates appointment doctor/time, books the new reservation, releases the old reservation, and creates three durable `PENDING` outbox jobs in one transaction.
-* Rescheduling to a different doctor is allowed when the new held slot is valid.
-* Repeated reschedule with the same already-booked reservation returns the existing appointment without duplicate state/jobs.
-* Cancellation and rescheduling mutations use PostgreSQL serializable transactions to avoid unsafe concurrent state changes.
-* Added rollback and race tests proving cancellation/rescheduling do not leave partial appointment, reservation, or outbox state.
+* Milestone 9 - Doctor Leave Conflict Handling.
+* Extended admin-only `POST /api/admin/doctors/:id/leave` to handle existing booked appointments on the leave date.
+* Leave creation now uses a PostgreSQL serializable Prisma transaction with bounded retry for serialization conflicts.
+* Leave creation validates the doctor/date, prevents duplicate leave entries, creates the leave, cancels affected `BOOKED` appointments, releases linked `BOOKED` reservations as `RELEASED`, and creates durable outbox jobs atomically.
+* Leave handling does not cancel already `CANCELLED` or `COMPLETED` appointments.
+* Leave cancellation outbox jobs are `DOCTOR_LEAVE_CANCELLATION_PATIENT`, `DOCTOR_LEAVE_CANCELLATION_DOCTOR`, and `CALENDAR_DELETE`.
+* Duplicate leave creation returns `409` and creates no duplicate cancellation jobs.
+* Existing `DELETE /api/admin/doctors/:id/leave/:leaveId` still deletes only the leave record and does not restore cancelled appointments or reservations.
+* Appointment booking confirmation now runs under serializable isolation with bounded retry, so booking-vs-leave races cannot leave both a leave record and an active booked appointment for the same doctor/date.
+* Existing patient cancellation/rescheduling transaction tests were tightened to assert outbox rollback per appointment, avoiding unrelated concurrent test-suite outbox rows.
 
 ## In Progress
 
@@ -33,9 +31,19 @@ None.
 
 ## Tests Passing
 
-Milestone 8 verification completed on 2026-08-20:
+Milestone 9 verification completed on 2026-08-20:
 
-* `npm.cmd run test:server` - passed with 114 tests, 0 failures.
+* `npm.cmd run test:server` - passed with 133 tests, 0 failures.
+  * 19 doctor leave conflict tests passed.
+  * Leave with no appointments creates a leave record.
+  * Leave with one or multiple `BOOKED` appointments cancels all affected booked appointments and releases linked booked reservations.
+  * Already `CANCELLED` and `COMPLETED` appointments remain unchanged.
+  * Duplicate leave returns `409` and creates no duplicate outbox jobs.
+  * Deleting leave does not restore cancelled appointments or released reservations.
+  * Booking after existing leave fails cleanly.
+  * Slot generation returns `[]` on leave dates.
+  * Leave rollback test passed: a simulated in-transaction failure left no partial leave, appointment cancellation, reservation release, or outbox jobs.
+  * Booking-vs-leave race test passed across repeated simultaneous operations: final state never contained both a leave record and an active `BOOKED` appointment for the same doctor/date; no duplicate appointment, active booked reservation, leave, or cancellation job set remained.
   * 28 appointment-view/cancellation/rescheduling tests passed.
   * Cancellation rollback test passed: a simulated in-transaction failure left the appointment `BOOKED`, the old reservation `BOOKED` and linked, and created no partial outbox jobs.
   * Cancellation slot-availability test passed: cancelling a booking releases the slot and the existing public slot-generation endpoint returns it again.
@@ -60,14 +68,14 @@ Milestone 8 verification completed on 2026-08-20:
 
 * Database-backed tests require a reachable PostgreSQL database configured through local `server/.env`.
 * Scheduling currently assumes a single application timezone: UTC.
-* The frontend has not yet implemented slot hold, appointment booking, cancellation, or rescheduling UI; Milestone 8 covers backend APIs only.
+* The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, or leave-management UI; Milestone 9 covers backend APIs only.
 * No background cleanup worker exists yet; expired holds are handled lazily for exact-slot replacement.
-* No outbox worker exists yet; Milestone 8 only creates durable outbox jobs transactionally.
+* No outbox worker exists yet; Milestone 9 only creates durable outbox jobs transactionally.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 8.
+None for Milestone 9.
 
 ## Next Action
 
-Begin Milestone 9 - Doctor Leave Conflict Handling.
+Begin Milestone 10 - Pre-Visit AI Summary.

@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 8 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, and rescheduling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, and transactional rescheduling.
+Milestone 9 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, and doctor leave conflict handling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, and transactional rescheduling.
 
 ## Tech Stack
 
@@ -239,7 +239,19 @@ Create leave request:
 }
 ```
 
-Milestone 4 creates and removes leave records only. Appointment cancellation caused by doctor leave is intentionally deferred to Milestone 9.
+Creating leave now runs in a serializable transaction. If the doctor already has `BOOKED` appointments on that UTC date, the leave transaction:
+
+* creates the `DoctorLeave`
+* marks affected `BOOKED` appointments as `CANCELLED`
+* releases linked `BOOKED` reservations as `RELEASED`
+* creates three durable `PENDING` outbox jobs per affected appointment:
+  * `DOCTOR_LEAVE_CANCELLATION_PATIENT`
+  * `DOCTOR_LEAVE_CANCELLATION_DOCTOR`
+  * `CALENDAR_DELETE`
+
+Already `CANCELLED` and `COMPLETED` appointments are not cancelled again. Duplicate leave creation returns `409` and does not create duplicate cancellation jobs.
+
+Deleting leave removes only the leave record. It does not restore appointments or reservations that were cancelled because of that leave.
 
 ### Public Doctor Discovery
 
@@ -379,7 +391,7 @@ Request:
 
 The new reservation must be a patient-owned, active, unexpired `HOLD`. The service revalidates the new slot against the doctor's UTC schedule, leave records, and existing appointment conflicts. Rescheduling to a different doctor is allowed when the new held slot is valid; the appointment's `doctorId`, `startAt`, and `endAt` are updated accordingly.
 
-Rescheduling runs in one serializable Prisma transaction:
+Rescheduling runs in one Prisma transaction with guarded reservation updates:
 
 * validates the existing appointment and new hold
 * updates the appointment to the new doctor/time
@@ -390,7 +402,17 @@ Rescheduling runs in one serializable Prisma transaction:
   * `RESCHEDULE_NOTIFICATION_DOCTOR`
   * `CALENDAR_UPDATE`
 
-The old booking is not released outside the transaction. If any step fails, PostgreSQL rolls the appointment, old reservation, new hold, and outbox jobs back together. Repeating the same reschedule request with the already-booked reservation returns the existing appointment without duplicating booking state or outbox jobs. Concurrent competing reschedules use serializable isolation; conflicting attempts receive `409`.
+The old booking is not released outside the transaction. If any step fails, PostgreSQL rolls the appointment, old reservation, new hold, and outbox jobs back together. Repeating the same reschedule request with the already-booked reservation returns the existing appointment without duplicating booking state or outbox jobs. Concurrent competing reschedules are guarded by reservation state checks; conflicting attempts receive `409`.
+
+### Doctor Leave Conflict Handling
+
+Doctor leave uses UTC calendar dates, matching the project's scheduling assumption. Booking confirmation also runs under serializable isolation and rechecks doctor leave inside the transaction. This protects the critical race between a patient confirming a slot and an admin creating leave for the same doctor/date:
+
+* if leave commits first, booking fails cleanly because the held slot is no longer valid
+* if booking commits first, leave creation cancels the new appointment and releases its reservation
+* the final database state must not contain both a leave record and an active `BOOKED` appointment for that doctor/date
+
+No email or Google Calendar API is called inside the leave transaction; external work is represented only by durable outbox jobs.
 
 ## Timezone Assumption
 
@@ -398,4 +420,4 @@ For the current assignment scope, the application uses one scheduling timezone: 
 
 ## Current Limitations
 
-Milestone 8 does not include outbox workers, actual email sending, LLM calls, actual Google Calendar calls, leave-triggered appointment cancellation, doctor visit completion, medication reminders, or frontend patient/doctor/admin dashboards. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 9 does not include outbox workers, actual email sending, LLM calls, actual Google Calendar calls, doctor visit completion, medication reminders, or frontend patient/doctor/admin dashboards. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
