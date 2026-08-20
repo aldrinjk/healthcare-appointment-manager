@@ -206,7 +206,7 @@ model MedicationReminder {
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
 
-  @@index([prescriptionId, scheduledAt])
+  @@unique([prescriptionId, scheduledAt])
   @@index([status, scheduledAt])
 }
 

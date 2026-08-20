@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 12 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, doctor visit completion, and post-visit AI summary processing: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` outbox job handlers, doctor appointment list/detail APIs, and transactional visit completion with prescriptions.
+Milestone 13 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, doctor visit completion, post-visit AI summary processing, and deterministic medication reminder scheduling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` outbox job handlers, doctor appointment list/detail APIs, transactional visit completion with prescriptions, and persisted medication reminder records.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ Milestone 12 provides the runnable foundation, database schema, authentication/R
 * JWT authentication
 * npm workspaces
 
-The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit and post-visit AI summary processing are implemented as outbox job handlers that future worker code can invoke.
+The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit and post-visit AI summary processing are implemented as outbox job handlers that future worker code can invoke. Medication reminder scheduling creates durable reminder rows now; delivery remains future work.
 
 ## Project Structure
 
@@ -61,6 +61,8 @@ Prisma is configured for PostgreSQL in `server/prisma/schema.prisma`. The curren
 * `OutboxJob`
 
 The migration also creates a PostgreSQL partial unique index named `SlotReservation_active_doctor_start_key` on active slot reservations. It protects `(doctorId, startAt)` when reservation status is `HOLD` or `BOOKED`, which is the database foundation for later double-booking prevention.
+
+Medication reminders are protected by a database-level unique constraint on `(prescriptionId, scheduledAt)` so scheduling the same prescription twice cannot duplicate the same dose reminder.
 
 ## Database Migration
 
@@ -507,11 +509,31 @@ Completion runs in one PostgreSQL serializable transaction:
 * rejects `CANCELLED` or already `COMPLETED` appointments with `409`
 * stores clinical notes and follow-up instructions
 * creates one or more prescription records
+* creates deterministic medication reminder records for the prescriptions
 * marks the appointment `COMPLETED`
 * sets `postSummaryStatus` to `PENDING`
 * creates exactly one durable `POST_VISIT_SUMMARY` outbox job
 
 The `POST_VISIT_SUMMARY` payload contains the appointment identifier only. No post-visit LLM call runs inside the doctor request; post-visit summary generation is handled by the durable job processor described below.
+
+### Medication Reminders
+
+Medication reminders are generated from doctor-entered `Prescription` rows only. AI is not used for reminder scheduling.
+
+Supported prescription frequency values and UTC reminder times:
+
+| Frequency | Reminder times |
+| --- | --- |
+| `ONCE_DAILY` | `09:00` UTC |
+| `TWICE_DAILY` | `09:00`, `21:00` UTC |
+| `THREE_TIMES_DAILY` | `09:00`, `15:00`, `21:00` UTC |
+| `AS_NEEDED` | no automatic scheduled reminders |
+
+Reminder generation starts from the UTC calendar date of visit completion. Any scheduled time before the completion timestamp on that first day is skipped; a dose exactly at the completion timestamp is retained. Later dates are generated through `durationDays`, and no reminders are created beyond that duration.
+
+Doctor visit completion creates prescription rows, medication reminder rows, and the `POST_VISIT_SUMMARY` outbox job inside the same PostgreSQL serializable transaction. If reminder generation fails, the whole completion rolls back: the appointment remains `BOOKED`, prescriptions do not partially persist, reminders do not partially persist, and no post-visit summary job is left behind.
+
+Milestone 13 creates `MedicationReminder` rows only. It does not create reminder email jobs and does not send email. `findDueMedicationReminders` is available for a future worker to fetch `PENDING` reminders where `scheduledAt <= now`, ordered by scheduled time, without exposing password hashes or secrets.
 
 ### Post-Visit AI Summary
 
@@ -568,4 +590,4 @@ For the current assignment scope, the application uses one scheduling timezone: 
 
 ## Current Limitations
 
-Milestone 12 does not include the full background worker loop, actual email sending, actual Google Calendar calls, medication reminder scheduling, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit and post-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.
+Milestone 13 does not include the full background worker loop, actual email sending, actual Google Calendar calls, medication reminder delivery, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit and post-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.

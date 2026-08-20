@@ -7,6 +7,7 @@ import {
 } from "@prisma/client";
 
 import { getPreVisitSummaryFallback } from "./pre-visit-summary.service.js";
+import { createMedicationRemindersForPrescriptions } from "./medication-reminder.service.js";
 import {
   getPostVisitSummaryFallback,
   postVisitSummaryJobType
@@ -38,6 +39,7 @@ type CompleteDoctorVisitInput = {
 type CompleteDoctorVisitOptions = {
   now?: Date;
   simulateFailureAfterAppointmentUpdate?: boolean;
+  simulateReminderSchedulingFailure?: boolean;
 };
 
 const doctorAppointmentSelect = {
@@ -253,16 +255,41 @@ export async function completeDoctorVisit(
           throw new Error("Simulated visit completion transaction failure");
         }
 
-        await tx.prescription.createMany({
-          data: prescriptions.map((prescription) => ({
-            appointmentId: existingAppointment.id,
-            medicineName: prescription.medicine,
-            dosage: prescription.dosage,
-            frequency: prescription.frequency,
-            durationDays: prescription.durationDays,
-            instructions: prescription.instructions
-          }))
-        });
+        const createdPrescriptions: Array<{
+          id: string;
+          frequency: PrescriptionFrequency;
+          durationDays: number;
+        }> = [];
+
+        for (const prescription of prescriptions) {
+          const createdPrescription = await tx.prescription.create({
+            data: {
+              appointmentId: existingAppointment.id,
+              medicineName: prescription.medicine,
+              dosage: prescription.dosage,
+              frequency: prescription.frequency,
+              durationDays: prescription.durationDays,
+              instructions: prescription.instructions
+            },
+            select: {
+              id: true,
+              frequency: true,
+              durationDays: true
+            }
+          });
+
+          createdPrescriptions.push(createdPrescription);
+        }
+
+        await createMedicationRemindersForPrescriptions(
+          tx,
+          createdPrescriptions,
+          now,
+          {
+            simulateFailureAfterReminderCreation:
+              options.simulateReminderSchedulingFailure
+          }
+        );
 
         await tx.outboxJob.create({
           data: {

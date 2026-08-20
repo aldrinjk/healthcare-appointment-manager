@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Milestone 13 - Medication Reminders is next. Milestone 12 is complete.
+Milestone 14 - Email Notifications is next. Milestone 13 is complete.
 
 ## Completed
 
@@ -18,6 +18,7 @@ Milestone 13 - Medication Reminders is next. Milestone 12 is complete.
 * Milestone 10 - Pre-Visit AI Summary.
 * Milestone 11 - Doctor Visit Completion.
 * Milestone 12 - Post-Visit AI Summary.
+* Milestone 13 - Medication Reminders.
 * Extended admin-only `POST /api/admin/doctors/:id/leave` to handle existing booked appointments on the leave date.
 * Leave creation now uses a PostgreSQL serializable Prisma transaction with bounded retry for serialization conflicts.
 * Leave creation validates the doctor/date, prevents duplicate leave entries, creates the leave, cancels affected `BOOKED` appointments, releases linked `BOOKED` reservations as `RELEASED`, and creates durable outbox jobs atomically.
@@ -59,6 +60,18 @@ Milestone 13 - Medication Reminders is next. Milestone 12 is complete.
 * Completed `POST_VISIT_SUMMARY` jobs are idempotent and do not call the provider or overwrite an existing valid summary.
 * Failed `POST_VISIT_SUMMARY` jobs are retryable and can later complete successfully without duplicating prescriptions.
 * Patient and doctor appointment response shaping now includes `postVisitSummaryFallback`, which returns `AI summary unavailable.` when `postSummaryStatus` is `FAILED`.
+* Added migration `20260820133000_add_medication_reminder_uniqueness`.
+* Added a database-level unique constraint on `MedicationReminder(prescriptionId, scheduledAt)` to prevent duplicate reminders for the same prescription and dose time.
+* Added a dedicated medication reminder scheduling service with a centralized UTC frequency map:
+  * `ONCE_DAILY` - `09:00` UTC.
+  * `TWICE_DAILY` - `09:00` and `21:00` UTC.
+  * `THREE_TIMES_DAILY` - `09:00`, `15:00`, and `21:00` UTC.
+  * `AS_NEEDED` - no automatic scheduled reminders.
+* Reminder scheduling uses the UTC calendar date of visit completion, skips first-day reminder times before the completion timestamp, retains a dose exactly at the completion timestamp, and never schedules beyond `durationDays`.
+* Doctor visit completion now creates prescription rows, medication reminder rows, and the `POST_VISIT_SUMMARY` outbox job inside the same PostgreSQL serializable transaction.
+* Reminder scheduling failures during visit completion roll back the whole completion transaction, leaving the appointment `BOOKED`, no prescriptions, no reminders, and no post-summary job.
+* Reminder scheduling creates `MedicationReminder` records only. Reminder email outbox jobs and delivery remain Milestone 14 work.
+* Added `findDueMedicationReminders` for future worker use. It returns only `PENDING` reminders with `scheduledAt <= now`, ordered by scheduled time, and selects safe reminder/prescription/appointment identifiers without password hashes or secrets.
 
 ## In Progress
 
@@ -66,11 +79,29 @@ None.
 
 ## Tests Passing
 
-Milestone 12 verification completed on 2026-08-20:
+Milestone 13 verification completed on 2026-08-20:
 
-* No schema or migration changes were required for Milestone 12; existing `Appointment.postVisitSummary` JSON and `Appointment.postSummaryStatus` fields were sufficient.
+* `npx.cmd prisma migrate dev` - applied `20260820133000_add_medication_reminder_uniqueness` successfully against the configured Neon PostgreSQL database.
+* `npx.cmd prisma migrate status` - passed; database schema is up to date.
 * `npm.cmd run prisma:validate` - passed.
 * `npm.cmd run prisma:generate` - passed.
+* `node --import tsx --test --test-concurrency=1 "src/tests/medication-reminder.test.ts"` - passed with 32 tests, 0 failures.
+  * `ONCE_DAILY`, `TWICE_DAILY`, and `THREE_TIMES_DAILY` create the correct reminder counts.
+  * `AS_NEEDED` creates zero scheduled reminders.
+  * `durationDays` is respected and no reminder falls outside the prescription duration.
+  * Centralized UTC schedule tests passed for `09:00`, `15:00`, and `21:00` mappings.
+  * First-day past reminder times are skipped, future first-day doses are retained, and an exact completion-time dose is retained.
+  * Reminder rows reference the correct prescription.
+  * Visit completion creates reminders atomically with prescriptions.
+  * Multiple prescriptions create independent reminder schedules.
+  * `AS_NEEDED` prescriptions create no reminders during completion.
+  * Appointment completion, prescription persistence, reminder persistence, and exactly one `POST_VISIT_SUMMARY` job all passed together.
+  * Rollback test passed: simulated reminder-generation failure left appointment `BOOKED`, no clinical notes/follow-up instructions, no prescriptions, no reminders, and no post-summary job.
+  * Idempotency tests passed: scheduling the same prescription twice did not duplicate reminders, and repeated completion did not duplicate prescriptions or reminders.
+  * Database unique protection test passed with Prisma `P2002` on duplicate `(prescriptionId, scheduledAt)`.
+  * Due-reminder query returned only `PENDING` reminders with `scheduledAt <= now`, excluded future reminders, excluded `SENT` and `FAILED`, respected limit, and ordered predictably.
+  * Reminder query/security tests passed: no `passwordHash`, secrets, API keys, database URLs, or development passwords were exposed in reminder results.
+* `node --import tsx --test --test-concurrency=1 "src/tests/doctor-visit-completion.test.ts"` - passed with 27 tests, 0 failures after reminder scheduling was added to the completion transaction.
 * `node --import tsx --test --test-concurrency=1 "src/tests/post-visit-summary.test.ts"` - passed with 22 tests, 0 failures.
   * Valid completed appointment generated and stored a structured post-visit summary.
   * `visitSummary`, authoritative `medicationSchedule`, and `followUpSteps` persisted.
@@ -86,7 +117,8 @@ Milestone 12 verification completed on 2026-08-20:
   * Fallback helper returned `AI summary unavailable.` for failed post-summary status.
   * Deterministic mock provider test passed.
   * Post-visit prompt safety constraints test passed.
-* `npm.cmd run test:server` - passed with 202 tests, 0 failures.
+* `npm.cmd run test:server` - passed with 234 tests, 0 failures.
+  * 32 medication reminder tests passed.
   * 22 post-visit AI summary tests passed.
   * 27 doctor appointment view / visit completion tests passed.
   * Unauthenticated doctor appointment list returned `401`.
@@ -153,16 +185,18 @@ Milestone 12 verification completed on 2026-08-20:
 
 * Database-backed tests require a reachable PostgreSQL database configured through local `server/.env`.
 * Scheduling currently assumes a single application timezone: UTC.
-* The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, leave-management UI, doctor visit completion UI, or AI summary display.
+* The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, leave-management UI, doctor visit completion UI, AI summary display, or medication reminder UI.
 * No background cleanup worker exists yet; expired holds are handled lazily for exact-slot replacement.
-* No full outbox worker loop exists yet; Milestones 10 and 12 provide directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` job handlers.
+* No full outbox worker loop exists yet; Milestones 10 and 12 provide directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` job handlers, and Milestone 13 provides a due-reminder query for future worker use.
+* Medication reminder delivery is not implemented yet; Milestone 13 creates durable reminder rows only.
 * Automated tests and local development use deterministic mock LLM mode unless local OpenAI credentials are explicitly configured.
 * A prior unrelated Neon sample table drift involving `playing_with_neon` was removed manually. The latest read-only Prisma/database verification reported migrations up to date and no remaining schema drift.
+* A post-application `prisma migrate deploy` recheck timed out acquiring Prisma's PostgreSQL advisory migration lock through the Neon pooler. The Milestone 13 migration had already applied successfully with `prisma migrate dev`, and `prisma migrate status` immediately afterward reported the database schema up to date.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 12.
+None for Milestone 13.
 
 ## Next Action
 
-Begin Milestone 13 - Medication Reminders.
+Begin Milestone 14 - Email Notifications.
