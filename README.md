@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 10 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, and pre-visit AI summary processing: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, and a directly invokable `PRE_VISIT_SUMMARY` outbox job handler.
+Milestone 11 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, and doctor visit completion: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, a directly invokable `PRE_VISIT_SUMMARY` outbox job handler, doctor appointment list/detail APIs, and transactional visit completion with prescriptions.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ Milestone 10 provides the runnable foundation, database schema, authentication/R
 * JWT authentication
 * npm workspaces
 
-The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit AI summary processing is implemented as an outbox job handler that future worker code can invoke.
+The full background worker loop, post-visit AI summary execution, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit AI summary processing is implemented as an outbox job handler that future worker code can invoke.
 
 ## Project Structure
 
@@ -362,7 +362,7 @@ Implemented endpoints:
 * `GET /api/appointments/me`
 * `GET /api/appointments/:id`
 
-The list endpoint returns only the authenticated patient's appointments sorted by `startAt`. Appointment responses include safe doctor/profile information, status, `startAt`, `endAt`, symptoms, summary statuses, post-visit summary data if present, and prescription data if present. They do not expose `passwordHash`, patient email, doctor email, or unrelated users' appointments.
+The list endpoint returns only the authenticated patient's appointments sorted by `startAt`. Appointment responses include safe doctor/profile information, status, `startAt`, `endAt`, symptoms, summary statuses, follow-up instructions/post-visit summary data if present, and prescription data if present. They do not expose `passwordHash`, patient email, doctor email, or unrelated users' appointments.
 
 ### Appointment Cancellation
 
@@ -406,6 +406,8 @@ Rescheduling runs in one Prisma transaction with guarded reservation updates:
   * `CALENDAR_UPDATE`
 
 The old booking is not released outside the transaction. If any step fails, PostgreSQL rolls the appointment, old reservation, new hold, and outbox jobs back together. Repeating the same reschedule request with the already-booked reservation returns the existing appointment without duplicating booking state or outbox jobs. Concurrent competing reschedules are guarded by reservation state checks; conflicting attempts receive `409`.
+
+Once a reschedule outbox job set exists for an appointment, additional competing reschedule requests using different holds receive `409`. This keeps a simultaneous competing reschedule race from creating multiple final booking states or duplicate reschedule notification/calendar jobs. Repeating the already-booked reservation remains idempotent.
 
 ### Doctor Leave Conflict Handling
 
@@ -452,10 +454,69 @@ Current provider modes:
 
 The pre-visit prompt is kept in `server/src/integrations/llm/prompts.ts`. It instructs the provider to return structured data only, use urgency `LOW`, `MEDIUM`, or `HIGH`, include a chief complaint and exactly three suggested questions, and not invent medical history, diagnoses, medications, or certainty.
 
+### Doctor Appointment Views
+
+These endpoints require a doctor Bearer token. Patients and admins receive `403`; unauthenticated requests receive `401`.
+
+Implemented endpoints:
+
+* `GET /api/doctor/appointments`
+* `GET /api/doctor/appointments/:id`
+
+Doctor appointment responses include only appointments assigned to the authenticated doctor's profile. Another doctor receives `404` for an appointment they do not own. Responses include patient-safe identity data, appointment time, status, symptoms, urgency, `preVisitSummary`, `preSummaryStatus`, clinical notes, follow-up instructions, post-summary status, and prescriptions when present. They do not expose `passwordHash`, patient email, or unrelated account fields.
+
+If `preSummaryStatus` is `FAILED`, the response keeps the original symptoms and includes:
+
+```text
+AI summary unavailable. Original patient symptoms remain available.
+```
+
+### Doctor Visit Completion
+
+`POST /api/doctor/appointments/:id/complete` requires the assigned doctor. Patients/admins receive `403`; a different doctor receives `404`.
+
+Request:
+
+```json
+{
+  "clinicalNotes": "Patient examined. Findings consistent with reported symptoms.",
+  "followUpInstructions": "Return if symptoms worsen or do not improve.",
+  "prescriptions": [
+    {
+      "medicine": "Amoxicillin",
+      "dosage": "500mg",
+      "frequency": "TWICE_DAILY",
+      "durationDays": 5,
+      "instructions": "Take after food"
+    }
+  ]
+}
+```
+
+Supported prescription frequency values come from the Prisma `PrescriptionFrequency` enum:
+
+* `ONCE_DAILY`
+* `TWICE_DAILY`
+* `THREE_TIMES_DAILY`
+* `AS_NEEDED`
+
+Completion runs in one PostgreSQL serializable transaction:
+
+* verifies the authenticated doctor owns the appointment
+* requires appointment status `BOOKED`
+* rejects `CANCELLED` or already `COMPLETED` appointments with `409`
+* stores clinical notes and follow-up instructions
+* creates one or more prescription records
+* marks the appointment `COMPLETED`
+* sets `postSummaryStatus` to `PENDING`
+* creates exactly one durable `POST_VISIT_SUMMARY` outbox job
+
+The `POST_VISIT_SUMMARY` payload contains the appointment identifier only. No post-visit LLM call runs inside the doctor request; Milestone 12 will process the durable job asynchronously.
+
 ## Timezone Assumption
 
 For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
 
 ## Current Limitations
 
-Milestone 10 does not include the full background worker loop, actual email sending, actual Google Calendar calls, doctor visit completion, post-visit summaries, medication reminders, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists, but automated tests and local development use mock mode unless local OpenAI credentials are configured.
+Milestone 11 does not include the full background worker loop, actual email sending, actual Google Calendar calls, post-visit summary generation, medication reminder scheduling, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.

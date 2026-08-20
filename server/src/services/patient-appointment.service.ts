@@ -43,6 +43,7 @@ const patientAppointmentSelect = {
   postSummaryStatus: true,
   postVisitSummary: true,
   urgency: true,
+  followUpInstructions: true,
   cancelledAt: true,
   createdAt: true,
   updatedAt: true,
@@ -99,6 +100,7 @@ function toPatientAppointment(appointment: PatientAppointmentRecord) {
     postSummaryStatus: appointment.postSummaryStatus,
     postVisitSummary: appointment.postVisitSummary,
     urgency: appointment.urgency,
+    followUpInstructions: appointment.followUpInstructions,
     prescriptions: appointment.prescriptions,
     cancelledAt: appointment.cancelledAt?.toISOString() ?? null,
     createdAt: appointment.createdAt.toISOString(),
@@ -149,6 +151,23 @@ async function ensureReservationSlotStillValid(
   }
 
   return matchingSlot;
+}
+
+async function hasRescheduleOutboxJobs(
+  tx: Prisma.TransactionClient,
+  appointmentId: string
+) {
+  const rows = await tx.$queryRaw<Array<{ type: string }>>`
+    SELECT type
+    FROM "OutboxJob"
+    WHERE payload->>'appointmentId' = ${appointmentId}
+  `;
+
+  return rows.some((row) =>
+    rescheduleOutboxJobTypes.includes(
+      row.type as (typeof rescheduleOutboxJobTypes)[number]
+    )
+  );
 }
 
 export async function listPatientAppointments(patientId: string) {
@@ -385,6 +404,14 @@ export async function reschedulePatientAppointment(
           };
         }
 
+        if (await hasRescheduleOutboxJobs(tx, appointment.id)) {
+          throw new AppError(
+            "Appointment already has a pending reschedule",
+            409,
+            "APPOINTMENT_RESCHEDULE_ALREADY_REQUESTED"
+          );
+        }
+
         if (newReservation.status !== ReservationStatus.HOLD) {
           throw new AppError(
             "Reservation is not an active hold",
@@ -524,6 +551,9 @@ export async function reschedulePatientAppointment(
           appointment: rescheduledAppointment,
           reused: false
         };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
       }
     );
 

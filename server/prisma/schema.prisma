@@ -145,6 +145,7 @@ model Appointment {
   preSummaryStatus      AiSummaryStatus   @default(NOT_REQUESTED)
   urgency               UrgencyLevel?
   clinicalNotes         String?
+  followUpInstructions  String?
   postVisitSummary      Json?
   postSummaryStatus     AiSummaryStatus   @default(NOT_REQUESTED)
   googleCalendarEventId String?
