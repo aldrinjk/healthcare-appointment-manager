@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Milestone 10 - Pre-Visit AI Summary is next. Milestone 9 is complete.
+Milestone 11 - Doctor Visit Completion is next. Milestone 10 is complete.
 
 ## Completed
 
@@ -15,6 +15,7 @@ Milestone 10 - Pre-Visit AI Summary is next. Milestone 9 is complete.
 * Milestone 7 - Appointment Booking.
 * Milestone 8 - Appointment Views, Cancellation and Rescheduling.
 * Milestone 9 - Doctor Leave Conflict Handling.
+* Milestone 10 - Pre-Visit AI Summary.
 * Extended admin-only `POST /api/admin/doctors/:id/leave` to handle existing booked appointments on the leave date.
 * Leave creation now uses a PostgreSQL serializable Prisma transaction with bounded retry for serialization conflicts.
 * Leave creation validates the doctor/date, prevents duplicate leave entries, creates the leave, cancels affected `BOOKED` appointments, releases linked `BOOKED` reservations as `RELEASED`, and creates durable outbox jobs atomically.
@@ -23,6 +24,17 @@ Milestone 10 - Pre-Visit AI Summary is next. Milestone 9 is complete.
 * Duplicate leave creation returns `409` and creates no duplicate cancellation jobs.
 * Existing `DELETE /api/admin/doctors/:id/leave/:leaveId` still deletes only the leave record and does not restore cancelled appointments or reservations.
 * Appointment booking confirmation now runs under serializable isolation with bounded retry, so booking-vs-leave races cannot leave both a leave record and an active booked appointment for the same doctor/date.
+* Added a clean LLM abstraction under `server/src/integrations/llm`.
+* Added a deterministic mock LLM provider for local development and automated tests.
+* Added an OpenAI provider adapter using configurable `LLM_PROVIDER`, `LLM_MODEL`, and local-only `LLM_API_KEY` values.
+* Added a reusable pre-visit prompt module with the assignment constraints: urgency, chief complaint, exactly three suggested questions, and no invented medical history/diagnoses.
+* Added `processPreVisitSummaryJob` for direct/future-worker processing of `PRE_VISIT_SUMMARY` outbox jobs.
+* Pre-visit summary processing validates provider output before saving.
+* Successful pre-visit summary processing preserves original symptoms, stores structured JSON in `Appointment.preVisitSummary`, stores `Appointment.urgency`, sets `preSummaryStatus` to `COMPLETED`, and marks the outbox job `COMPLETED`.
+* Provider failures, malformed output, invalid urgency, wrong question counts, and missing symptoms leave the appointment `BOOKED`, preserve symptoms, set `preSummaryStatus` to `FAILED`, and record a safe outbox failure.
+* Completed `PRE_VISIT_SUMMARY` jobs are idempotent and do not regenerate or overwrite an existing summary.
+* Failed `PRE_VISIT_SUMMARY` jobs are retryable and can later complete successfully.
+* Tightened the doctor-leave rollback test to count outbox jobs scoped to the appointment under test, avoiding cross-file interference from legitimate Milestone 10 `PRE_VISIT_SUMMARY` jobs.
 * Existing patient cancellation/rescheduling transaction tests were tightened to assert outbox rollback per appointment, avoiding unrelated concurrent test-suite outbox rows.
 
 ## In Progress
@@ -31,9 +43,22 @@ None.
 
 ## Tests Passing
 
-Milestone 9 verification completed on 2026-08-20:
+Milestone 10 verification completed on 2026-08-20:
 
-* `npm.cmd run test:server` - passed with 133 tests, 0 failures.
+* `npm.cmd run test:server` - passed with 153 tests, 0 failures.
+  * 20 pre-visit AI summary tests passed.
+  * Valid symptoms generate and persist a structured pre-visit summary.
+  * Urgency, chief complaint, and exactly three suggested questions are stored.
+  * Original patient symptoms remain unchanged after success.
+  * Successful processing sets `preSummaryStatus` to `COMPLETED` and marks the `PRE_VISIT_SUMMARY` job `COMPLETED`.
+  * Provider failure leaves the appointment `BOOKED`, sets `preSummaryStatus` to `FAILED`, and records safe job failure information.
+  * Malformed provider output, invalid urgency, fewer than three questions, and more than three questions are rejected safely.
+  * Empty or missing symptoms fail safely without calling the provider.
+  * Failed-summary fallback text is available for later doctor UI/API use.
+  * Completed job idempotency test passed: a completed job did not regenerate or overwrite the stored summary.
+  * Retry test passed: a failed job later completed successfully without corrupting the appointment.
+  * Deterministic mock provider test passed.
+  * Prompt constraint test passed.
   * 19 doctor leave conflict tests passed.
   * Leave with no appointments creates a leave record.
   * Leave with one or multiple `BOOKED` appointments cancels all affected booked appointments and releases linked booked reservations.
@@ -63,19 +88,21 @@ Milestone 9 verification completed on 2026-08-20:
 * `npm.cmd audit --audit-level=moderate` - passed with 0 vulnerabilities.
 * Compiled backend startup check with current local env - passed; `GET /api/health` returned `{"status":"ok"}`.
 * Git hygiene check - no tracked `.env`, no tracked local secrets, and build artifacts remain ignored.
+* No Prisma migration was required for Milestone 10 because the existing schema already contained `symptoms`, `preSummaryStatus`, `urgency`, `preVisitSummary`, and the required `OutboxJob` fields.
 
 ## Known Issues
 
 * Database-backed tests require a reachable PostgreSQL database configured through local `server/.env`.
 * Scheduling currently assumes a single application timezone: UTC.
-* The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, or leave-management UI; Milestone 9 covers backend APIs only.
+* The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, leave-management UI, or AI summary display.
 * No background cleanup worker exists yet; expired holds are handled lazily for exact-slot replacement.
-* No outbox worker exists yet; Milestone 9 only creates durable outbox jobs transactionally.
+* No full outbox worker loop exists yet; Milestone 10 provides the directly invokable `PRE_VISIT_SUMMARY` job handler only.
+* Automated tests and local development use deterministic mock LLM mode unless local OpenAI credentials are explicitly configured.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 9.
+None for Milestone 10.
 
 ## Next Action
 
-Begin Milestone 10 - Pre-Visit AI Summary.
+Begin Milestone 11 - Doctor Visit Completion.

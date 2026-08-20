@@ -303,14 +303,18 @@ async function leaveJobsForAppointment(appointmentId: string) {
   );
 }
 
-async function allMilestoneOutboxCount() {
-  return prisma.outboxJob.count({
-    where: {
-      type: {
-        in: [...bookingOutboxJobTypes, ...doctorLeaveCancellationOutboxJobTypes]
-      }
-    }
-  });
+async function milestoneOutboxCountForAppointment(appointmentId: string) {
+  const rows = await prisma.$queryRaw<Array<{ type: string }>>`
+    SELECT type
+    FROM "OutboxJob"
+    WHERE payload->>'appointmentId' = ${appointmentId}
+  `;
+
+  return rows.filter((row) =>
+    [...bookingOutboxJobTypes, ...doctorLeaveCancellationOutboxJobTypes].includes(
+      row.type as (typeof bookingOutboxJobTypes)[number]
+    )
+  ).length;
 }
 
 before(async () => {
@@ -687,7 +691,9 @@ describe("doctor leave conflict handling", () => {
       doctorId,
       slotStartAt: startAt(date, "09:00")
     });
-    const jobCountBefore = await allMilestoneOutboxCount();
+    const jobCountBefore = await milestoneOutboxCountForAppointment(
+      appointment.id
+    );
 
     await assert.rejects(
       () =>
@@ -720,7 +726,7 @@ describe("doctor leave conflict handling", () => {
           where: { id: reservation.id },
           select: { status: true, appointmentId: true }
         }),
-        allMilestoneOutboxCount()
+        milestoneOutboxCountForAppointment(appointment.id)
       ]);
 
     assert.equal(leaveCount, 0);

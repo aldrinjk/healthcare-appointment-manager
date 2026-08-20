@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 9 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, and doctor leave conflict handling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, and transactional rescheduling.
+Milestone 10 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, and pre-visit AI summary processing: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, and a directly invokable `PRE_VISIT_SUMMARY` outbox job handler.
 
 ## Tech Stack
 
@@ -13,7 +13,7 @@ Milestone 9 provides the runnable foundation, database schema, authentication/RB
 * JWT authentication
 * npm workspaces
 
-Background job processing, LLM execution, email sending, and Google Calendar API calls are planned for later milestones.
+The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit AI summary processing is implemented as an outbox job handler that future worker code can invoke.
 
 ## Project Structure
 
@@ -33,6 +33,9 @@ Current variables:
 * `CLIENT_URL` - frontend origin allowed by CORS
 * `DATABASE_URL` - PostgreSQL connection string used by Prisma
 * `JWT_SECRET` - local secret used to sign and verify JWTs
+* `LLM_PROVIDER` - `mock` for deterministic local/test summaries or `openai` for the OpenAI adapter
+* `LLM_MODEL` - model name used by the OpenAI adapter, defaults to `gpt-4o-mini`
+* `LLM_API_KEY` - local-only OpenAI API key when `LLM_PROVIDER=openai`
 * `VITE_API_URL` - client API base URL
 
 The remaining variables in `.env.example` are placeholders for future milestones and contain no real credentials.
@@ -414,10 +417,45 @@ Doctor leave uses UTC calendar dates, matching the project's scheduling assumpti
 
 No email or Google Calendar API is called inside the leave transaction; external work is represented only by durable outbox jobs.
 
+### Pre-Visit AI Summary
+
+Booking creates a durable `PRE_VISIT_SUMMARY` outbox job. Milestone 10 implements the job handler service that a future worker can invoke directly; it does not expose a public job-execution endpoint.
+
+Logical persisted summary shape:
+
+```json
+{
+  "urgency": "LOW",
+  "chiefComplaint": "Persistent cough and fever",
+  "suggestedQuestions": [
+    "When did these symptoms start?",
+    "Have the symptoms changed or worsened since they began?",
+    "What makes the symptoms better or worse?"
+  ]
+}
+```
+
+The structured provider output is validated before saving. On success, the service:
+
+* preserves the original `symptoms`
+* stores the structured JSON in `Appointment.preVisitSummary`
+* stores urgency in `Appointment.urgency`
+* sets `preSummaryStatus` to `COMPLETED`
+* marks the `PRE_VISIT_SUMMARY` job `COMPLETED`
+
+On provider failure, timeout, malformed output, invalid urgency, or any question-count mismatch, the appointment remains `BOOKED`, original symptoms remain available, `preSummaryStatus` becomes `FAILED`, and the outbox job records a safe retryable failure message.
+
+Current provider modes:
+
+* `LLM_PROVIDER=mock` - deterministic development/test provider; no API key or network required.
+* `LLM_PROVIDER=openai` - OpenAI adapter using `LLM_MODEL` and local-only `LLM_API_KEY`.
+
+The pre-visit prompt is kept in `server/src/integrations/llm/prompts.ts`. It instructs the provider to return structured data only, use urgency `LOW`, `MEDIUM`, or `HIGH`, include a chief complaint and exactly three suggested questions, and not invent medical history, diagnoses, medications, or certainty.
+
 ## Timezone Assumption
 
 For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
 
 ## Current Limitations
 
-Milestone 9 does not include outbox workers, actual email sending, LLM calls, actual Google Calendar calls, doctor visit completion, medication reminders, or frontend patient/doctor/admin dashboards. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 10 does not include the full background worker loop, actual email sending, actual Google Calendar calls, doctor visit completion, post-visit summaries, medication reminders, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists, but automated tests and local development use mock mode unless local OpenAI credentials are configured.
