@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 7 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, and appointment booking confirmation: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, and durable booking outbox jobs.
+Milestone 8 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, and rescheduling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, an initial migration, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave record management, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, and transactional rescheduling.
 
 ## Tech Stack
 
@@ -338,10 +338,64 @@ No email provider, LLM provider, or Google Calendar API is called inside the boo
 
 Repeated confirmation of an already-booked patient-owned reservation returns the existing appointment and does not create duplicate appointments or duplicate outbox jobs.
 
+### Patient Appointment Views
+
+These endpoints require a patient Bearer token. Doctors and admins receive `403`; unauthenticated requests receive `401`.
+
+Implemented endpoints:
+
+* `GET /api/appointments/me`
+* `GET /api/appointments/:id`
+
+The list endpoint returns only the authenticated patient's appointments sorted by `startAt`. Appointment responses include safe doctor/profile information, status, `startAt`, `endAt`, symptoms, summary statuses, post-visit summary data if present, and prescription data if present. They do not expose `passwordHash`, patient email, doctor email, or unrelated users' appointments.
+
+### Appointment Cancellation
+
+`DELETE /api/appointments/:id` requires a patient Bearer token and only cancels that patient's own `BOOKED` appointments.
+
+Cancellation runs in one Prisma transaction:
+
+* marks the appointment `CANCELLED`
+* records `cancelledAt`
+* releases the linked `BOOKED` slot reservation by changing it to `RELEASED`
+* creates three durable `PENDING` outbox jobs:
+  * `CANCELLATION_CONFIRMATION_PATIENT`
+  * `CANCELLATION_NOTIFICATION_DOCTOR`
+  * `CALENDAR_DELETE`
+
+Completed or already-cancelled appointments return `409` and do not create duplicate cancellation jobs.
+
+### Appointment Rescheduling
+
+`PATCH /api/appointments/:id/reschedule` requires a patient Bearer token.
+
+Request:
+
+```json
+{
+  "newReservationId": "new-held-reservation-id"
+}
+```
+
+The new reservation must be a patient-owned, active, unexpired `HOLD`. The service revalidates the new slot against the doctor's UTC schedule, leave records, and existing appointment conflicts. Rescheduling to a different doctor is allowed when the new held slot is valid; the appointment's `doctorId`, `startAt`, and `endAt` are updated accordingly.
+
+Rescheduling runs in one serializable Prisma transaction:
+
+* validates the existing appointment and new hold
+* updates the appointment to the new doctor/time
+* converts the new reservation to `BOOKED` and links it to the appointment
+* releases the old `BOOKED` reservation as `RELEASED`
+* creates three durable `PENDING` outbox jobs:
+  * `RESCHEDULE_CONFIRMATION_PATIENT`
+  * `RESCHEDULE_NOTIFICATION_DOCTOR`
+  * `CALENDAR_UPDATE`
+
+The old booking is not released outside the transaction. If any step fails, PostgreSQL rolls the appointment, old reservation, new hold, and outbox jobs back together. Repeating the same reschedule request with the already-booked reservation returns the existing appointment without duplicating booking state or outbox jobs. Concurrent competing reschedules use serializable isolation; conflicting attempts receive `409`.
+
 ## Timezone Assumption
 
 For the current assignment scope, the application uses one scheduling timezone: UTC. Date query parameters such as `2026-09-21` are interpreted as UTC calendar dates, and configured availability times such as `09:00` are interpreted as UTC times on that date. Multi-timezone clinic/provider scheduling is intentionally deferred.
 
 ## Current Limitations
 
-Milestone 7 does not include outbox workers, email sending, LLM calls, Google Calendar calls, rescheduling, cancellation, leave-triggered appointment cancellation, doctor visit completion, prescriptions, medication reminders, or frontend booking UI. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
+Milestone 8 does not include outbox workers, actual email sending, LLM calls, actual Google Calendar calls, leave-triggered appointment cancellation, doctor visit completion, medication reminders, or frontend patient/doctor/admin dashboards. Those are scheduled in later milestones in `PROJECT_PLAN.md`.
