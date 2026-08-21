@@ -616,7 +616,7 @@ describe("appointment booking confirmation", () => {
     assert.equal(response.status, 409);
   });
 
-  test("exactly four expected outbox jobs are created", async () => {
+  test("exactly five expected outbox jobs are created", async () => {
     const date = nextUtcDateForWeekday(1);
     const doctorId = await createDoctor();
     const hold = await createHold({
@@ -630,7 +630,7 @@ describe("appointment booking confirmation", () => {
     const body = response.body as BookingResponse;
     const jobCount = await countOutboxJobsForAppointment(body.appointment.id);
 
-    assert.equal(jobCount, 4);
+    assert.equal(jobCount, 5);
   });
 
   test("all outbox jobs start PENDING", async () => {
@@ -647,7 +647,7 @@ describe("appointment booking confirmation", () => {
     const body = response.body as BookingResponse;
     const statuses = await outboxStatusesForAppointment(body.appointment.id);
 
-    assert.equal(statuses.length, 4);
+    assert.equal(statuses.length, 5);
     assert.equal(
       statuses.every((job) => job.status === OutboxJobStatus.PENDING),
       true
@@ -698,7 +698,7 @@ describe("appointment booking confirmation", () => {
 
     assert.equal(secondBody.appointment.id, firstBody.appointment.id);
     assert.equal(appointmentCount, 1);
-    assert.equal(jobCount, 4);
+    assert.equal(jobCount, 5);
   });
 
   test("transaction rollback leaves no partial appointment or jobs after simulated failure", async () => {
@@ -794,6 +794,6 @@ describe("appointment booking confirmation", () => {
     assert.equal(acceptableResponses.length, 10);
     assert.equal(createdAppointments.length, 1);
     assert.equal(bookedReservations, 1);
-    assert.equal(jobCount, 4);
+    assert.equal(jobCount, 5);
   });
 });

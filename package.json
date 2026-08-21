@@ -13,6 +13,7 @@
     "build:server": "npm run build --workspace server",
     "test:server": "npm run test --workspace server",
     "typecheck:server": "npm run typecheck --workspace server",
+    "worker:email": "npm run worker:email --workspace server",
     "prisma:generate": "npm run prisma:generate --workspace server",
     "prisma:validate": "npm run prisma:validate --workspace server",
     "db:migrate": "npm run prisma:migrate --workspace server",

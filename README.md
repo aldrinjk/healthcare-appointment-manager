@@ -2,7 +2,7 @@
 
 Healthcare Appointment & Follow-up Manager is a technical hiring assignment project for a role-based healthcare booking MVP. The finished application will support patients, doctors, and admins with safe appointment booking, slot holds, AI summaries, prescriptions, reminders, email notifications, Google Calendar synchronization, and retryable background work.
 
-Milestone 13 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, doctor visit completion, post-visit AI summary processing, and deterministic medication reminder scheduling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` outbox job handlers, doctor appointment list/detail APIs, transactional visit completion with prescriptions, and persisted medication reminder records.
+Milestone 14 provides the runnable foundation, database schema, authentication/RBAC layer, admin doctor-management APIs, patient-facing doctor discovery with slot generation, patient slot holds, appointment booking confirmation, patient appointment views, cancellation, rescheduling, doctor leave conflict handling, pre-visit AI summary processing, doctor visit completion, post-visit AI summary processing, deterministic medication reminder scheduling, and async email notification/retry handling: a React/Vite/TypeScript client, an Express/TypeScript server, Prisma configured for PostgreSQL, environment configuration, centralized JSON errors, a health endpoint, domain models, migrations, development seed data, JWT login, patient registration, role middleware, admin doctor creation/update/list/detail, availability management, leave conflict handling, public doctor list/detail, available appointment slots, temporary hold reservations, transactional hold-to-appointment confirmation, symptom storage, durable booking outbox jobs, safe patient appointment retrieval, transactional cancellation, transactional rescheduling, directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` outbox job handlers, doctor appointment list/detail APIs, transactional visit completion with prescriptions, persisted medication reminder records, email provider adapters, email templates, appointment reminder outbox scheduling, medication reminder email delivery, and a one-cycle email worker script.
 
 ## Tech Stack
 
@@ -13,14 +13,14 @@ Milestone 13 provides the runnable foundation, database schema, authentication/R
 * JWT authentication
 * npm workspaces
 
-The full background worker loop, email sending, and Google Calendar API calls are planned for later milestones. Pre-visit and post-visit AI summary processing are implemented as outbox job handlers that future worker code can invoke. Medication reminder scheduling creates durable reminder rows now; delivery remains future work.
+Google Calendar API calls and frontend dashboards are planned for later milestones. Pre-visit and post-visit AI summary processing are implemented as outbox job handlers that future worker code can invoke. Email notification processing is implemented for a one-cycle worker; local development and automated tests use the mock email provider unless SMTP settings are configured.
 
 ## Project Structure
 
 ```text
 client/   React + Vite frontend
 server/   Express API, Prisma configuration, backend source
-docs/     Project documentation added in later milestones
+docs/     System design and project documentation
 ```
 
 ## Environment Variables
@@ -36,9 +36,15 @@ Current variables:
 * `LLM_PROVIDER` - `mock` for deterministic local/test summaries or `openai` for the OpenAI adapter
 * `LLM_MODEL` - model name used by the OpenAI adapter, defaults to `gpt-4o-mini`
 * `LLM_API_KEY` - local-only OpenAI API key when `LLM_PROVIDER=openai`
+* `EMAIL_PROVIDER` - `mock` for deterministic local/test email delivery or `smtp` for the Nodemailer SMTP adapter
+* `SMTP_HOST` - SMTP host used only when `EMAIL_PROVIDER=smtp`
+* `SMTP_PORT` - SMTP port used only when `EMAIL_PROVIDER=smtp`
+* `SMTP_USER` - local-only SMTP username used only when `EMAIL_PROVIDER=smtp`
+* `SMTP_PASS` - local-only SMTP password used only when `EMAIL_PROVIDER=smtp`
+* `SMTP_FROM` - sender address used by notification emails
 * `VITE_API_URL` - client API base URL
 
-The remaining variables in `.env.example` are placeholders for future milestones and contain no real credentials.
+All values in `.env.example` are safe placeholders and contain no real credentials.
 
 ## Install
 
@@ -344,12 +350,13 @@ Successful response:
 }
 ```
 
-Booking converts a patient-owned, unexpired `HOLD` reservation into one `BOOKED` appointment inside a single Prisma transaction. The transaction also links the reservation to the appointment and creates four durable `PENDING` outbox jobs:
+Booking converts a patient-owned, unexpired `HOLD` reservation into one `BOOKED` appointment inside a single Prisma transaction. The transaction also links the reservation to the appointment and creates five durable `PENDING` outbox jobs:
 
 * `BOOKING_CONFIRMATION_PATIENT`
 * `BOOKING_CONFIRMATION_DOCTOR`
 * `PRE_VISIT_SUMMARY`
 * `CALENDAR_CREATE`
+* `APPOINTMENT_REMINDER_PATIENT`
 
 No email provider, LLM provider, or Google Calendar API is called inside the booking transaction. External processing is deferred to future workers so provider failures cannot roll back an already committed appointment.
 
@@ -533,7 +540,40 @@ Reminder generation starts from the UTC calendar date of visit completion. Any s
 
 Doctor visit completion creates prescription rows, medication reminder rows, and the `POST_VISIT_SUMMARY` outbox job inside the same PostgreSQL serializable transaction. If reminder generation fails, the whole completion rolls back: the appointment remains `BOOKED`, prescriptions do not partially persist, reminders do not partially persist, and no post-visit summary job is left behind.
 
-Milestone 13 creates `MedicationReminder` rows only. It does not create reminder email jobs and does not send email. `findDueMedicationReminders` is available for a future worker to fetch `PENDING` reminders where `scheduledAt <= now`, ordered by scheduled time, without exposing password hashes or secrets.
+Milestone 14 adds medication reminder email delivery for due reminders. A worker can claim due `PENDING` or retryable `FAILED` reminders where `scheduledAt <= now`; successful delivery marks the reminder `SENT`, while failure marks it `FAILED`, increments attempts, and leaves the prescription/appointment state unchanged. Future reminders, already `SENT` reminders, and `AS_NEEDED` prescriptions are not sent.
+
+### Email Notifications and Retry Handling
+
+Email delivery is isolated behind `server/src/integrations/email`. Domain services never call Nodemailer directly.
+
+Implemented providers:
+
+* `EMAIL_PROVIDER=mock` - deterministic in-memory provider for local development and automated tests; no network or credentials required.
+* `EMAIL_PROVIDER=smtp` - Nodemailer SMTP adapter using local-only SMTP environment variables.
+
+Implemented email templates cover:
+
+* patient and doctor booking confirmations
+* patient cancellation confirmation and doctor cancellation notification
+* patient reschedule confirmation and doctor reschedule notification
+* patient and doctor doctor-leave cancellation notices
+* patient appointment reminders
+* medication reminders
+
+`processEmailOutboxJob(jobId)` handles email outbox jobs by atomically claiming due `PENDING` or retryable `FAILED` jobs as `PROCESSING`, sending through the configured provider, and then marking the job `COMPLETED` or `FAILED`. The bounded retry policy uses at most three attempts with deterministic backoff of approximately 1, 5, and 15 minutes. Completed jobs are idempotent and are not sent again. Provider error details are sanitized before being stored.
+
+Booking creates an `APPOINTMENT_REMINDER_PATIENT` outbox job transactionally with the appointment. Reminder jobs are scheduled about 24 hours before the appointment. If the appointment is booked less than 24 hours ahead, the reminder is scheduled immediately. Cancellation deactivates pending reminder jobs, and rescheduling deactivates the old reminder and creates a new one for the updated appointment time.
+
+Medication reminder delivery uses `MedicationReminder` rows directly. A due reminder is claimed as `PROCESSING`, sent through the email provider, and marked `SENT` on success. Delivery failure marks the reminder `FAILED`, increments attempts, and leaves the appointment and prescription data intact for retry.
+
+Run one email-worker cycle after building the backend:
+
+```bash
+npm run build:server
+npm run worker:email
+```
+
+The worker processes due email outbox jobs and due medication reminders once, then exits. It is intentionally not a long-running daemon yet.
 
 ### Post-Visit AI Summary
 
@@ -590,4 +630,4 @@ For the current assignment scope, the application uses one scheduling timezone: 
 
 ## Current Limitations
 
-Milestone 13 does not include the full background worker loop, actual email sending, actual Google Calendar calls, medication reminder delivery, or frontend patient/doctor/admin dashboards. The OpenAI adapter exists for pre-visit and post-visit summaries, but automated tests and local development use mock mode unless local OpenAI credentials are configured.
+Milestone 14 does not include Google Calendar calls, a long-running daemon/scheduler, or frontend patient/doctor/admin dashboards. The SMTP adapter exists, but actual SMTP delivery requires local credentials and `EMAIL_PROVIDER=smtp`. Automated tests and local development use mock email mode by default. The OpenAI adapter exists for pre-visit and post-visit summaries, but automated tests and local development use mock LLM mode unless local OpenAI credentials are configured.

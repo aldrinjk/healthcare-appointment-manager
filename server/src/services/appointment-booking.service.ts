@@ -7,6 +7,10 @@ import {
 } from "@prisma/client";
 
 import { AppError } from "../middleware/app-error.js";
+import {
+  appointmentReminderJobType,
+  createAppointmentReminderJob
+} from "./appointment-reminder.service.js";
 import { getBaseSlotsForDoctorDate } from "./doctor.service.js";
 import { prisma } from "../utils/prisma.js";
 
@@ -15,6 +19,7 @@ export const maxSymptomsLength = 5_000;
 export const bookingOutboxJobTypes = [
   "BOOKING_CONFIRMATION_PATIENT",
   "BOOKING_CONFIRMATION_DOCTOR",
+  appointmentReminderJobType,
   "PRE_VISIT_SUMMARY",
   "CALENDAR_CREATE"
 ] as const;
@@ -260,6 +265,13 @@ export async function confirmAppointment(
               nextAttemptAt
             }
           ]
+        });
+
+        await createAppointmentReminderJob(tx, {
+          appointmentId: appointment.id,
+          patientId: input.patientId,
+          startAt: appointment.startAt,
+          now
         });
 
         return {

@@ -6,6 +6,10 @@ import {
 } from "@prisma/client";
 
 import { AppError } from "../middleware/app-error.js";
+import {
+  createAppointmentReminderJob,
+  deactivateAppointmentReminderJobs
+} from "./appointment-reminder.service.js";
 import { getBaseSlotsForDoctorDate } from "./doctor.service.js";
 import { getPostVisitSummaryFallback } from "./post-visit-summary.service.js";
 import { prisma } from "../utils/prisma.js";
@@ -279,6 +283,12 @@ export async function cancelPatientAppointment(
           }
         }
 
+        await deactivateAppointmentReminderJobs(
+          tx,
+          existingAppointment.id,
+          "Appointment reminder obsolete after cancellation"
+        );
+
         await tx.outboxJob.createMany({
           data: [
             {
@@ -549,6 +559,19 @@ export async function reschedulePatientAppointment(
               nextAttemptAt: now
             }
           ]
+        });
+
+        await deactivateAppointmentReminderJobs(
+          tx,
+          appointment.id,
+          "Appointment reminder obsolete after reschedule"
+        );
+
+        await createAppointmentReminderJob(tx, {
+          appointmentId: appointment.id,
+          patientId: input.patientId,
+          startAt: newReservation.startAt,
+          now
         });
 
         return {

@@ -59,6 +59,7 @@ enum PrescriptionFrequency {
 
 enum MedicationReminderStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
   CANCELLED

@@ -1,0 +1,1 @@
+ALTER TYPE "MedicationReminderStatus" ADD VALUE IF NOT EXISTS 'PROCESSING';

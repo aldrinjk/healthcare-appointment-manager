@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Milestone 14 - Email Notifications is next. Milestone 13 is complete.
+Milestone 15 - Google Calendar Integration is next. Milestone 14 is complete.
 
 ## Completed
 
@@ -19,6 +19,7 @@ Milestone 14 - Email Notifications is next. Milestone 13 is complete.
 * Milestone 11 - Doctor Visit Completion.
 * Milestone 12 - Post-Visit AI Summary.
 * Milestone 13 - Medication Reminders.
+* Milestone 14 - Email Notifications and Retry Handling.
 * Extended admin-only `POST /api/admin/doctors/:id/leave` to handle existing booked appointments on the leave date.
 * Leave creation now uses a PostgreSQL serializable Prisma transaction with bounded retry for serialization conflicts.
 * Leave creation validates the doctor/date, prevents duplicate leave entries, creates the leave, cancels affected `BOOKED` appointments, releases linked `BOOKED` reservations as `RELEASED`, and creates durable outbox jobs atomically.
@@ -70,14 +71,57 @@ Milestone 14 - Email Notifications is next. Milestone 13 is complete.
 * Reminder scheduling uses the UTC calendar date of visit completion, skips first-day reminder times before the completion timestamp, retains a dose exactly at the completion timestamp, and never schedules beyond `durationDays`.
 * Doctor visit completion now creates prescription rows, medication reminder rows, and the `POST_VISIT_SUMMARY` outbox job inside the same PostgreSQL serializable transaction.
 * Reminder scheduling failures during visit completion roll back the whole completion transaction, leaving the appointment `BOOKED`, no prescriptions, no reminders, and no post-summary job.
-* Reminder scheduling creates `MedicationReminder` records only. Reminder email outbox jobs and delivery remain Milestone 14 work.
+* Reminder scheduling creates `MedicationReminder` records for later delivery.
 * Added `findDueMedicationReminders` for future worker use. It returns only `PENDING` reminders with `scheduledAt <= now`, ordered by scheduled time, and selects safe reminder/prescription/appointment identifiers without password hashes or secrets.
+* Added migration `20260821093000_add_medication_reminder_processing_status`.
+* Added `PROCESSING` to `MedicationReminderStatus` so medication reminder email delivery can be claimed safely by one worker.
+* Added a clean email abstraction under `server/src/integrations/email`.
+* Added a deterministic mock email provider for local development and automated tests.
+* Added a Nodemailer SMTP provider adapter using configurable `EMAIL_PROVIDER`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` values.
+* Added email templates for booking confirmations, cancellation notices, reschedule notices, doctor-leave cancellation notices, appointment reminders, and medication reminders.
+* Added `processEmailOutboxJob` and `processDueEmailJobs` for due email outbox work.
+* Email jobs are atomically claimed as `PROCESSING` from due `PENDING`/retryable `FAILED` states so concurrent workers do not send the same notification more than once.
+* Email retry handling uses a bounded policy with three attempts and deterministic backoff.
+* Email provider failures are sanitized before persistence and never roll back committed appointment, prescription, or reminder domain state.
+* Booking now creates five durable outbox jobs transactionally: patient booking email, doctor booking email, pre-visit summary, calendar create, and patient appointment reminder.
+* Appointment reminder jobs are scheduled about 24 hours before appointment start; bookings less than 24 hours ahead schedule the reminder immediately.
+* Cancellation deactivates pending/retryable appointment reminder jobs, and rescheduling deactivates the old reminder then creates a new reminder for the updated appointment time.
+* Added medication reminder email delivery from due `MedicationReminder` rows.
+* Medication reminder delivery marks reminders `SENT` on success, marks them `FAILED` with incremented attempts on failure, excludes future/SENT/AS_NEEDED reminders, and preserves appointment/prescription data on email failure.
+* Added a one-cycle email worker script at `npm run worker:email`.
+* Added `docs/system-design.md` covering double-booking prevention, doctor leave conflict handling, slot holds, and notification failure handling within the assignment word limit.
 
 ## In Progress
 
 None.
 
 ## Tests Passing
+
+Milestone 14 verification completed on 2026-08-21:
+
+* `npx.cmd prisma migrate dev` - applied `20260821093000_add_medication_reminder_processing_status` successfully against the configured Neon PostgreSQL database.
+* `npx.cmd prisma migrate status` - passed; all expected migrations are applied and the database schema is up to date.
+* `npm.cmd run prisma:validate` - passed.
+* `npm.cmd run prisma:generate` - passed.
+* `node --import tsx --test --test-concurrency=1 "src/tests/outbox-email.test.ts"` - passed with 42 tests, 0 failures.
+  * Mock email provider and template tests passed.
+  * SMTP factory validation tests passed without using real SMTP credentials.
+  * Booking, cancellation, reschedule, doctor-leave cancellation, appointment reminder, and medication reminder email templates rendered without secrets.
+  * Email outbox job success, failure, retry backoff, max-attempt handling, safe error sanitization, completed-job idempotency, unsupported-job rejection, future-job exclusion, and domain-state isolation tests passed.
+  * Concurrent processing of the same email outbox job sent exactly one email.
+  * Booking created one `APPOINTMENT_REMINDER_PATIENT` job transactionally.
+  * Appointment reminders scheduled about 24 hours before appointment start, used immediate scheduling for appointments booked less than 24 hours ahead, were deactivated on cancellation, and were replaced on reschedule.
+  * Medication reminder delivery marked due reminders `SENT` on success, marked failures retryable, excluded future/SENT/AS_NEEDED reminders, preserved prescriptions on failure, and supported retry.
+  * Due-worker iteration processed due email outbox jobs and due medication reminders while excluding future/completed work.
+* `node --import tsx --test --test-concurrency=1 "src/tests/appointment-booking.test.ts"` - passed with 22 tests, 0 failures after booking reminder outbox creation was added.
+* `node --import tsx --test --test-concurrency=1 "src/tests/appointment-management.test.ts"` - passed with 28 tests, 0 failures after cancellation/reschedule reminder handling was added.
+* `npm.cmd run test:server` - passed with 276 tests, 0 failures.
+* `npm.cmd run typecheck:server` - passed.
+* `npm.cmd run build:client` - passed.
+* `npm.cmd run build:server` - passed.
+* `npm.cmd audit --audit-level=moderate` - passed with 0 vulnerabilities.
+* Compiled backend startup check with current local env - passed; `GET /api/health` returned `{"status":"ok"}`.
+* Git hygiene check - no `.env` files, real credentials, `node_modules`, `dist`, editor settings, or logs are tracked.
 
 Milestone 13 verification completed on 2026-08-20:
 
@@ -169,7 +213,7 @@ Milestone 13 verification completed on 2026-08-20:
   * Simultaneous competing reschedule test passed: 10 concurrent reschedule attempts left exactly one final `BOOKED` reservation linked to the appointment and exactly one set of reschedule outbox jobs.
   * 22 appointment-booking tests passed.
   * Transaction rollback test passed: a simulated in-transaction failure left no partial appointment, no partial outbox jobs, and the reservation remained an active `HOLD`.
-  * Simultaneous confirmation test passed: 10 concurrent confirmation requests for the same reservation resulted in exactly 1 appointment, exactly 1 `BOOKED` reservation linked to it, and exactly 4 booking outbox jobs.
+  * Simultaneous confirmation test passed: 10 concurrent confirmation requests for the same reservation resulted in exactly 1 appointment, exactly 1 `BOOKED` reservation linked to it, and exactly 4 booking outbox jobs at the time of Milestone 13. Milestone 14 now adds a fifth transactional booking outbox job for appointment reminders.
   * 20 slot-hold tests still passed.
   * 17 doctor discovery/slot-generation tests still passed.
   * 15 admin doctor-management tests still passed.
@@ -187,16 +231,17 @@ Milestone 13 verification completed on 2026-08-20:
 * Scheduling currently assumes a single application timezone: UTC.
 * The frontend has not yet implemented slot hold, appointment booking, cancellation, rescheduling, leave-management UI, doctor visit completion UI, AI summary display, or medication reminder UI.
 * No background cleanup worker exists yet; expired holds are handled lazily for exact-slot replacement.
-* No full outbox worker loop exists yet; Milestones 10 and 12 provide directly invokable `PRE_VISIT_SUMMARY` and `POST_VISIT_SUMMARY` job handlers, and Milestone 13 provides a due-reminder query for future worker use.
-* Medication reminder delivery is not implemented yet; Milestone 13 creates durable reminder rows only.
+* A one-cycle email worker exists, but there is no long-running scheduler/daemon yet.
+* Pre-visit and post-visit AI job handlers remain directly invokable services for future generic worker integration.
+* Real SMTP delivery requires local SMTP credentials and `EMAIL_PROVIDER=smtp`; automated tests use the mock email provider.
 * Automated tests and local development use deterministic mock LLM mode unless local OpenAI credentials are explicitly configured.
 * A prior unrelated Neon sample table drift involving `playing_with_neon` was removed manually. The latest read-only Prisma/database verification reported migrations up to date and no remaining schema drift.
 * A post-application `prisma migrate deploy` recheck timed out acquiring Prisma's PostgreSQL advisory migration lock through the Neon pooler. The Milestone 13 migration had already applied successfully with `prisma migrate dev`, and `prisma migrate status` immediately afterward reported the database schema up to date.
 
 ## Blocked by Credentials / Human Action
 
-None for Milestone 13.
+None for Milestone 14.
 
 ## Next Action
 
-Begin Milestone 14 - Email Notifications.
+Begin Milestone 15 - Google Calendar Integration.

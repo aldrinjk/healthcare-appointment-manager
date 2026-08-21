@@ -13,7 +13,16 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   LLM_PROVIDER: z.enum(["mock", "openai"]).default("mock"),
   LLM_API_KEY: z.string().optional().default(""),
-  LLM_MODEL: z.string().optional().default("gpt-4o-mini")
+  LLM_MODEL: z.string().optional().default("gpt-4o-mini"),
+  EMAIL_PROVIDER: z.enum(["mock", "smtp"]).default("mock"),
+  SMTP_HOST: z.string().optional().default(""),
+  SMTP_PORT: z.coerce.number().int().positive().optional().default(587),
+  SMTP_USER: z.string().optional().default(""),
+  SMTP_PASS: z.string().optional().default(""),
+  SMTP_FROM: z
+    .string()
+    .optional()
+    .default("Healthcare App <no-reply@example.com>")
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
